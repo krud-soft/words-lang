@@ -1,0 +1,49 @@
+{
+    "name": "words-lang",
+    "displayName": "WORDS Specification Language",
+    "description": "Syntax highlighting for .wds files and ```wds code fences in Markdown",
+    "version": "0.1.0",
+    "publisher": "words-lang",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/your-org/words-lang"
+    },
+    "contributes": {
+        "languages": [
+            {
+                "id": "wds",
+                "aliases": [
+                    "WORDS Spec",
+                    "wds"
+                ],
+                "extensions": [
+                    ".wds"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "wds",
+                "scopeName": "source.wds",
+                "path": "./syntaxes/wds.tmGrammar.json"
+            },
+            {
+                "scopeName": "markdown.wds.codeblock",
+                "path": "./syntaxes/wds.markdown-injection.json",
+                "injectTo": [
+                    "text.html.markdown"
+                ],
+                "embeddedLanguages": {
+                    "meta.embedded.block.wds": "wds"
+                }
+            }
+        ]
+    }
+}

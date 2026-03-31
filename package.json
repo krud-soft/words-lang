@@ -54,5 +54,8 @@
                 }
             }
         ]
+    },
+    "scripts": {
+        "build": "vsce package"
     }
 }

@@ -1,0 +1,10 @@
+{
+    "iconDefinitions": {
+        "_wds": {
+            "iconPath": "./wds.svg"
+        }
+    },
+    "languageIds": {
+        "wds": "_wds"
+    }
+}

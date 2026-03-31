@@ -1,34 +1,37 @@
-# words-lang
+<img src="icons/wds-background.svg" width="64" height="64" align="right"/>
 
-Syntax highlighting for the WORDS specification language (`.wds` files) and ` ```wds ` code fences in Markdown.
+# WORDS Language Support
 
-## What's inside
+Syntax highlighting for the [WORDS specification language](https://krud-soft.github.io/words/) in VS Code.
 
-| File | Purpose |
-|---|---|
-| `syntaxes/wds.tmGrammar.json` | The TextMate grammar — the reusable artifact |
-| `syntaxes/wds.markdown-injection.json` | Injects the grammar into Markdown code fences |
-| `package.json` | VS Code extension manifest |
-| `language-configuration.json` | Bracket matching, comment toggling |
+## Features
 
-## Development
+- Syntax highlighting for `.wds` files
+- Syntax highlighting for ` ```wds ` code fences in Markdown
+- Bracket matching and comment toggling (`//`)
 
-Press `F5` in VS Code to launch an Extension Development Host with the grammar loaded. Open any `.wds` file or a `.md` file containing ` ```wds ` fences to see highlighting.
+## Screenshot
 
-## Packaging
+(add one before publishing)
 
-```bash
-npm install -g @vscode/vsce
-vsce package
-# produces words-lang-0.1.0.vsix
-```
+## What is WORDS?
 
-Install in VS Code via **Extensions → ··· → Install from VSIX**.
+WORDS is a behavioral specification language for describing software systems at an intermediate level between a human requirement and a working implementation — structured enough to be machine-actionable, close enough to natural language to be written and reviewed without tooling.
 
-## Using the grammar elsewhere
+Learn more at [krud-soft.github.io/words](https://krud-soft.github.io/words/).
 
-The file `syntaxes/wds.tmGrammar.json` is a standard TextMate grammar and can be consumed directly by:
+## Grammar reuse
+
+The TextMate grammar (`syntaxes/wds.tmGrammar.json`) can be consumed independently by:
 
 - **Shiki** — pass it as a custom language to `createHighlighter`
 - **Zed** — add it as a language extension
 - **GitHub Linguist** — register via `grammars.yml`
+
+## Development
+
+Press `F5` to launch an Extension Development Host. Open any `.wds` file or a Markdown file with a ` ```wds ` fence to see highlighting.
+
+## License
+
+MIT

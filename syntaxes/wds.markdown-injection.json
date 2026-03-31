@@ -1,416 +1,44 @@
 {
-    "name": "WORDS Specification Language",
-    "scopeName": "source.wds",
-    "fileTypes": [
-        "wds"
-    ],
+    "scopeName": "markdown.wds.codeblock",
+    "fileTypes": [],
+    "injectionSelector": "L:text.html.markdown",
     "patterns": [
         {
-            "include": "#comments"
-        },
-        {
-            "include": "#ownership-declaration"
-        },
-        {
-            "include": "#top-level-constructs"
-        },
-        {
-            "include": "#block-keywords"
-        },
-        {
-            "include": "#control-keywords"
-        },
-        {
-            "include": "#system-access"
-        },
-        {
-            "include": "#state-access"
-        },
-        {
-            "include": "#builtin-types"
-        },
-        {
-            "include": "#optional-marker"
-        },
-        {
-            "include": "#operators"
-        },
-        {
-            "include": "#strings"
-        },
-        {
-            "include": "#qualified-name"
-        },
-        {
-            "include": "#pascal-case-name"
-        },
-        {
-            "include": "#camel-case-name"
-        },
-        {
-            "include": "#punctuation"
+            "include": "#wds-code-block"
         }
     ],
     "repository": {
-        "comments": {
-            "match": "//.*$",
-            "name": "comment.line.double-slash.wds"
-        },
-        "strings": {
-            "begin": "\"",
-            "end": "\"",
-            "name": "string.quoted.double.wds",
+        "wds-code-block": {
+            "begin": "(^|\\G)(\\s*)(\\`{3,}|~{3,})\\s*(?i:(wds)(\\s+[^`~]*)?$)",
+            "name": "markup.fenced_code.block.markdown",
+            "beginCaptures": {
+                "3": {
+                    "name": "punctuation.definition.markdown"
+                },
+                "4": {
+                    "name": "punctuation.definition.markdown"
+                },
+                "5": {
+                    "name": "fenced_code.block.language.markdown"
+                }
+            },
+            "end": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+            "endCaptures": {
+                "3": {
+                    "name": "punctuation.definition.markdown"
+                }
+            },
+            "contentName": "meta.embedded.block.wds",
             "patterns": [
                 {
-                    "match": "\\\\.",
-                    "name": "constant.character.escape.wds"
-                }
-            ]
-        },
-        "ownership-declaration": {
-            "comment": "A bare 'module ModuleName' on its own line — the ownership declaration at the top of component files",
-            "match": "^(module)\\s+([A-Z][A-Za-z0-9]*)\\s*$",
-            "captures": {
-                "1": {
-                    "name": "keyword.other.module.wds"
-                },
-                "2": {
-                    "name": "entity.name.namespace.wds"
-                }
-            }
-        },
-        "top-level-constructs": {
-            "comment": "Top-level construct declarations: system, module, state, context, screen, view, provider, adapter, interface",
-            "patterns": [
-                {
-                    "comment": "system SystemName \"description\"",
-                    "match": "\\b(system)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.system.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.system.wds"
+                    "begin": "(^|\\G)(\\s*)(.*)",
+                    "while": "(^|\\G)(?!\\s*([`~]{3,})\\s*$)",
+                    "contentName": "meta.embedded.block.wds",
+                    "patterns": [
+                        {
+                            "include": "source.wds"
                         }
-                    }
-                },
-                {
-                    "comment": "module ModuleName \"description\"",
-                    "match": "\\b(module)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.module.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.namespace.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "process ProcessName \"description\"",
-                    "match": "\\b(process)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.process.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.process.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "state StateName",
-                    "match": "\\b(state)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.state.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.state.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "context ContextName",
-                    "match": "\\b(context)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.context.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.context.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "screen ScreenName",
-                    "match": "\\b(screen)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.screen.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.screen.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "view ViewName or view Module.ViewName",
-                    "match": "\\b(view)\\s+([A-Z][A-Za-z0-9]*(?:\\.[A-Z][A-Za-z0-9]*)?)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.view.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.view.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "provider ProviderName",
-                    "match": "\\b(provider)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.provider.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.provider.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "adapter AdapterName or adapter Module.AdapterName.method",
-                    "match": "\\b(adapter)\\s+([A-Z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.adapter.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.adapter.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "interface InterfaceName",
-                    "match": "\\b(interface)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.other.interface.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.interface.wds"
-                        }
-                    }
-                }
-            ]
-        },
-        "block-keywords": {
-            "comment": "Keywords that open named blocks inside constructs",
-            "match": "\\b(modules|props|state|returns|receives|uses|interface|implements|start)\\b",
-            "name": "keyword.control.block.wds"
-        },
-        "control-keywords": {
-            "comment": "Behavioral and flow keywords",
-            "patterns": [
-                {
-                    "comment": "when ... returns ... enter — the process transition rule",
-                    "match": "\\b(when)\\s+([A-Z][A-Za-z0-9]*)\\s+(returns)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.control.when.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.state.wds"
-                        },
-                        "3": {
-                            "name": "keyword.control.returns.wds"
-                        },
-                        "4": {
-                            "name": "entity.name.type.context.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "enter StateName",
-                    "match": "\\b(enter)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.control.enter.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.state.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "start StateName",
-                    "match": "\\b(start)\\s+([A-Z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "keyword.control.start.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.type.state.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "for ... as iteration",
-                    "match": "\\b(for)\\b",
-                    "name": "keyword.control.for.wds"
-                },
-                {
-                    "comment": "as binding in for...as",
-                    "match": "\\b(as)\\b",
-                    "name": "keyword.control.as.wds"
-                },
-                {
-                    "comment": "if conditional",
-                    "match": "\\b(if)\\b",
-                    "name": "keyword.control.if.wds"
-                },
-                {
-                    "comment": "is not comparison",
-                    "match": "\\bis\\s+not\\b",
-                    "name": "keyword.operator.comparison.wds"
-                },
-                {
-                    "comment": "is assignment / comparison",
-                    "match": "\\bis\\b",
-                    "name": "keyword.operator.assignment.wds"
-                },
-                {
-                    "comment": "switch handler keyword",
-                    "match": "\\b(switch)\\b",
-                    "name": "keyword.control.switch.wds"
-                },
-                {
-                    "comment": "onLoad callback keyword",
-                    "match": "\\b(onLoad)\\b",
-                    "name": "keyword.other.onload.wds"
-                }
-            ]
-        },
-        "system-access": {
-            "comment": "system.* runtime access — system.setContext, system.getContext, system.dropContext, system.ModuleName.*",
-            "patterns": [
-                {
-                    "comment": "system built-in methods",
-                    "match": "\\b(system)\\.(setContext|getContext|dropContext)\\b",
-                    "captures": {
-                        "1": {
-                            "name": "variable.language.system.wds"
-                        },
-                        "2": {
-                            "name": "support.function.system.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "system.ModuleName.something — runtime module access",
-                    "match": "\\b(system)\\.([A-Z][A-Za-z0-9]*)(\\.([A-Za-z][A-Za-z0-9]*))*",
-                    "captures": {
-                        "1": {
-                            "name": "variable.language.system.wds"
-                        },
-                        "2": {
-                            "name": "entity.name.namespace.wds"
-                        }
-                    }
-                }
-            ]
-        },
-        "state-access": {
-            "comment": "state.context, state.return(), state.items etc — state object access inside screens and components",
-            "patterns": [
-                {
-                    "comment": "state.return()",
-                    "match": "\\b(state)\\.(return)\\b",
-                    "captures": {
-                        "1": {
-                            "name": "variable.language.state.wds"
-                        },
-                        "2": {
-                            "name": "support.function.state.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "state.context.property",
-                    "match": "\\b(state)\\.(context)(\\.[a-z][A-Za-z0-9]*)*",
-                    "captures": {
-                        "1": {
-                            "name": "variable.language.state.wds"
-                        },
-                        "2": {
-                            "name": "variable.other.context.wds"
-                        }
-                    }
-                },
-                {
-                    "comment": "state.fieldName — direct state field assignment",
-                    "match": "\\b(state)\\.([a-z][A-Za-z0-9]*)",
-                    "captures": {
-                        "1": {
-                            "name": "variable.language.state.wds"
-                        },
-                        "2": {
-                            "name": "variable.other.member.wds"
-                        }
-                    }
-                }
-            ]
-        },
-        "builtin-types": {
-            "comment": "Primitive and collection types",
-            "match": "\\b(string|integer|float|boolean|context|list|map)\\b",
-            "name": "support.type.builtin.wds"
-        },
-        "optional-marker": {
-            "comment": "? prefix on optional types and receives clauses",
-            "match": "\\?(?=[A-Z])",
-            "name": "keyword.operator.optional.wds"
-        },
-        "operators": {
-            "comment": "returns() type annotation — the returns(Type) form in interface method declarations",
-            "match": "\\b(returns)\\b",
-            "name": "keyword.control.returns.wds"
-        },
-        "qualified-name": {
-            "comment": "ModuleName.ComponentName — cross-module references",
-            "match": "\\b([A-Z][A-Za-z0-9]*)\\.([A-Z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*)",
-            "captures": {
-                "1": {
-                    "name": "entity.name.namespace.wds"
-                },
-                "2": {
-                    "name": "entity.name.type.wds"
-                }
-            }
-        },
-        "pascal-case-name": {
-            "comment": "Standalone PascalCase names — states, contexts, types referenced by name",
-            "match": "\\b[A-Z][A-Za-z0-9]+\\b",
-            "name": "entity.name.type.wds"
-        },
-        "camel-case-name": {
-            "comment": "camelCase identifiers — prop names, method names, variable names",
-            "match": "\\b[a-z][A-Za-z0-9]+\\b",
-            "name": "variable.other.wds"
-        },
-        "punctuation": {
-            "patterns": [
-                {
-                    "match": "[()]",
-                    "name": "punctuation.parenthesis.wds"
-                },
-                {
-                    "match": ",",
-                    "name": "punctuation.separator.comma.wds"
-                },
-                {
-                    "match": "\\.",
-                    "name": "punctuation.accessor.dot.wds"
+                    ]
                 }
             ]
         }

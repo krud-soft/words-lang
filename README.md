@@ -1,4 +1,4 @@
-| <img src="icons/wds-background.svg" width="48" height="48"/> | WORDS Language Support |
+| <img src="icons/wds-background.png" width="45" height="45"/> | WORDS Language Support |
 |---|---|
 
 Syntax highlighting for the [WORDS specification language](https://krud-soft.github.io/words/) in VS Code.

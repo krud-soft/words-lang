@@ -9,7 +9,7 @@
         "url": "https://github.com/krud-soft/words-lang"
     },
     "license": "MIT",
-    "icon": "icons/wds.png",
+    "icon": "./icons/wds.png",
     "engines": {
         "vscode": "^1.74.0"
     },
@@ -54,5 +54,8 @@
                 }
             }
         ]
+    },
+    "scripts": {
+        "package": "vsce package --no-dependencies"
     }
 }

@@ -5,6 +5,6 @@
         "packages/*"
     ],
     "scripts": {
-        "build": "cd packages/extension && vsce package"
+        "package": "npm run package -w packages/extension"
     }
 }

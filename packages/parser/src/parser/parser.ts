@@ -172,9 +172,15 @@ export class Parser {
             this.skipTrivia()
             if (this.check(TokenType.EOF)) break
 
+            const savedPos = this.pos
             const node = this.parseTopLevel()
             if (node !== null) {
                 nodes.push(node)
+            } else if (this.pos === savedPos) {
+                // parseTopLevel returned null without advancing (e.g. synchronise()
+                // stopped at an RParen that has no matching open at the top level).
+                // Force progress to prevent an infinite loop.
+                this.advance()
             }
         }
 
@@ -1270,9 +1276,17 @@ export class Parser {
         }
 
         // Call expression: path(args...)
+        // Supports both keyword-style args (`name is value`) and a single positional
+        // PascalIdent type reference (e.g. `system.getContext(SystemUser)`).
         if (this.check(TokenType.LParen)) {
             this.advance() // consume '('
             const args = this.parseArguments()
+            if (args.length === 0 && this.check(TokenType.PascalIdent)) {
+                const valTok = this.current()
+                const name = this.advance().value
+                const value: AccessExpressionNode = { kind: 'AccessExpression', token: valTok, path: [name] }
+                args.push({ kind: 'Argument', token: valTok, name: '', value })
+            }
             this.expect(TokenType.RParen)
             const callee: AccessExpressionNode = { kind: 'AccessExpression', token: tok, path }
             return { kind: 'CallExpression', token: tok, callee, args } as CallExpressionNode
@@ -1448,12 +1462,16 @@ export class Parser {
         }
 
         // Primitive types
+        // Note: the lexer maps the word 'context' to TokenType.Context (the construct
+        // keyword token), never to TContext. We accept both here so 'context' works
+        // as a type in system interface methods (e.g. returns(context)).
         const primitiveMap: Partial<Record<TokenType, string>> = {
             [TokenType.TString]: 'string',
             [TokenType.TInteger]: 'integer',
             [TokenType.TFloat]: 'float',
             [TokenType.TBoolean]: 'boolean',
             [TokenType.TContext]: 'context',
+            [TokenType.Context]: 'context',
         }
         if (tok.type in primitiveMap) {
             this.advance()

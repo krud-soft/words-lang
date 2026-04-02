@@ -19,6 +19,7 @@
     "main": "./dist/client.js",
     "scripts": {
         "build": "tsc",
+        "list": "vsce ls",
         "build:watch": "tsc --watch",
         "package": "vsce package --no-dependencies"
     },

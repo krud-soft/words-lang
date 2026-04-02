@@ -1,0 +1,54 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-parser",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/packages/parser"
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "build-lsp",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/packages/lsp"
+            },
+            "group": "build",
+            "dependsOn": "build-parser",
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "build-extension",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/packages/extension"
+            },
+            "group": "build",
+            "dependsOn": "build-lsp",
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "build-all",
+            "dependsOn": "build-extension",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "silent"
+            }
+        }
+    ]
+}

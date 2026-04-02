@@ -1,0 +1,334 @@
+/**
+ * connection.ts
+ *
+ * The WordsConnection class wires the WORDS parser library to the LSP
+ * protocol. It handles the full lifecycle of the language server:
+ *
+ * - Initialisation: receives the workspace root from the client and loads
+ *   the Workspace by scanning all .wds files.
+ *
+ * - Diagnostics: runs the Analyser on every file change and pushes
+ *   diagnostics to the client for display in the editor.
+ *
+ * - Go-to-definition: resolves a cursor position to a construct name and
+ *   returns the file path and range of its definition using the Workspace's
+ *   constructPaths index.
+ *
+ * - Document sync: keeps the Workspace in sync as files are opened, changed,
+ *   and saved. On save, the Workspace reloads the changed file and re-runs
+ *   the analyser across the whole project.
+ *
+ * The connection never touches the filesystem directly — all file access
+ * goes through the Workspace.
+ */
+
+import {
+    Connection,
+    TextDocuments,
+    InitializeParams,
+    InitializeResult,
+    TextDocumentSyncKind,
+    DefinitionParams,
+    Location,
+    Range,
+    Position,
+    PublishDiagnosticsParams,
+    Diagnostic as LspDiagnostic,
+    DiagnosticSeverity as LspDiagnosticSeverity,
+} from 'vscode-languageserver/node'
+import { TextDocument } from 'vscode-languageserver-textdocument'
+import { Workspace, Analyser, Diagnostic, DiagnosticSeverity } from '@words-lang/parser'
+
+export class WordsConnection {
+    private connection: Connection
+    private documents: TextDocuments<TextDocument>
+    private workspace: Workspace | null = null
+    private projectRoot: string | null = null
+
+    constructor(connection: Connection) {
+        this.connection = connection
+        this.documents = new TextDocuments(TextDocument)
+    }
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+
+    /**
+     * Registers all LSP protocol handlers and starts listening.
+     * Called once from server.ts after the connection is created.
+     */
+    listen(): void {
+        this.connection.onInitialize(params => this.onInitialize(params))
+        this.connection.onInitialized(() => this.onInitialized())
+        this.connection.onDefinition(params => this.onDefinition(params))
+
+        this.documents.onDidSave(event => this.onDidSave(event.document))
+        this.documents.onDidOpen(event => this.onDidSave(event.document))
+
+        this.documents.listen(this.connection)
+        this.connection.listen()
+    }
+
+    // ── Initialize ─────────────────────────────────────────────────────────────
+
+    /**
+     * Handles the LSP initialize request.
+     * Receives the workspace root URI and declares server capabilities.
+     */
+    private onInitialize(params: InitializeParams): InitializeResult {
+        if (params.rootUri) {
+            this.projectRoot = uriToPath(params.rootUri)
+        } else if (params.rootPath) {
+            this.projectRoot = params.rootPath
+        }
+
+        return {
+            capabilities: {
+                textDocumentSync: TextDocumentSyncKind.Incremental,
+                definitionProvider: true,
+            },
+        }
+    }
+
+    /**
+     * Handles the LSP initialized notification.
+     * The client has confirmed initialization — load the workspace and
+     * run the first analysis pass.
+     */
+    private onInitialized(): void {
+        if (!this.projectRoot) return
+        this.reloadWorkspace()
+    }
+
+    // ── Document events ────────────────────────────────────────────────────────
+
+    /**
+     * Handles file open and save events.
+     * Reloads the changed file in the workspace and re-runs the analyser
+     * across the whole project, then pushes updated diagnostics.
+     */
+    private onDidSave(document: TextDocument): void {
+        if (!this.workspace) {
+            this.reloadWorkspace()
+            return
+        }
+
+        const filePath = uriToPath(document.uri)
+        if (filePath.endsWith('.wds')) {
+            this.workspace.reload(filePath)
+            this.publishDiagnostics()
+        }
+    }
+
+    // ── Go-to-definition ───────────────────────────────────────────────────────
+
+    /**
+     * Handles a go-to-definition request from the client.
+     *
+     * Resolves the word under the cursor to a construct name, then looks it
+     * up in the workspace's constructPaths index. If found, returns the
+     * file path and the start of the file as the definition location.
+     *
+     * The range points to line 0 for now — a future improvement would parse
+     * the target file and find the exact token position of the construct
+     * declaration.
+     */
+    private onDefinition(params: DefinitionParams): Location | null {
+        if (!this.workspace) return null
+
+        const document = this.documents.get(params.textDocument.uri)
+        if (!document) return null
+
+        const word = this.getWordAtPosition(document, params.position)
+        if (!word) return null
+
+        // Try to resolve as a qualified name (Module.Construct or just Construct)
+        const location = this.resolveDefinition(word)
+        return location
+    }
+
+    // ── Diagnostics ────────────────────────────────────────────────────────────
+
+    /**
+     * Runs the analyser and pushes all diagnostics to the client.
+     * Clears diagnostics for files that no longer have any errors.
+     */
+    private publishDiagnostics(): void {
+        if (!this.workspace) return
+
+        // Collect all diagnostics by file path
+        const byFile = new Map<string, LspDiagnostic[]>()
+
+        // Parse diagnostics
+        for (const { filePath, diagnostic } of this.workspace.allParseDiagnostics()) {
+            if (!byFile.has(filePath)) byFile.set(filePath, [])
+            byFile.get(filePath)!.push(toLspDiagnostic(diagnostic))
+        }
+
+        // Semantic diagnostics from the analyser
+        const { diagnostics } = new Analyser(this.workspace).analyse()
+        for (const { filePath, diagnostic } of diagnostics) {
+            if (!byFile.has(filePath)) byFile.set(filePath, [])
+            byFile.get(filePath)!.push(toLspDiagnostic(diagnostic))
+        }
+
+        // Push diagnostics for all files that have them
+        for (const [filePath, diags] of byFile) {
+            this.connection.sendDiagnostics({
+                uri: pathToUri(filePath),
+                diagnostics: diags,
+            } as PublishDiagnosticsParams)
+        }
+
+        // Clear diagnostics for files that previously had errors but now don't
+        for (const [filePath] of this.workspace.files) {
+            if (!byFile.has(filePath)) {
+                this.connection.sendDiagnostics({
+                    uri: pathToUri(filePath),
+                    diagnostics: [],
+                } as PublishDiagnosticsParams)
+            }
+        }
+    }
+
+    // ── Private helpers ────────────────────────────────────────────────────────
+
+    /**
+     * Loads or reloads the entire workspace from the project root.
+     */
+    private reloadWorkspace(): void {
+        if (!this.projectRoot) return
+        this.workspace = Workspace.load(this.projectRoot)
+        this.publishDiagnostics()
+    }
+
+    /**
+     * Extracts the word (identifier) at the given position in a document.
+     * Used to determine what the user's cursor is on for go-to-definition.
+     */
+    private getWordAtPosition(document: TextDocument, position: Position): string | null {
+        const text = document.getText()
+        const offset = document.offsetAt(position)
+
+        // Walk left to find the start of the word
+        let start = offset
+        while (start > 0 && isIdentChar(text[start - 1])) {
+            start--
+        }
+
+        // Walk right to find the end of the word
+        let end = offset
+        while (end < text.length && isIdentChar(text[end])) {
+            end++
+        }
+
+        // Also check for a dot before the word to capture the module prefix
+        let qualifiedStart = start
+        if (start > 0 && text[start - 1] === '.') {
+            // Walk further left past the module name
+            qualifiedStart = start - 1
+            while (qualifiedStart > 0 && isIdentChar(text[qualifiedStart - 1])) {
+                qualifiedStart--
+            }
+        }
+
+        const word = text.slice(qualifiedStart, end).replace(/^\./, '')
+        return word.length > 0 ? word : null
+    }
+
+    /**
+     * Resolves a word to a definition Location using the workspace index.
+     *
+     * Handles three forms:
+     *   - `Module.Construct`  — looks up by module and construct name
+     *   - `ConstructName`     — searches all modules for a matching construct
+     *   - `ModuleName`        — returns the module definition file
+     */
+    private resolveDefinition(word: string): Location | null {
+        if (!this.workspace) return null
+
+        const dotIndex = word.indexOf('.')
+        if (dotIndex !== -1) {
+            // Qualified name: Module.Construct
+            const moduleName = word.slice(0, dotIndex)
+            const constructName = word.slice(dotIndex + 1)
+            const key = `${moduleName}/${constructName}`
+            const filePath = this.workspace.constructPaths.get(key)
+            if (filePath) return fileLocation(filePath)
+        }
+
+        // Try as a module name
+        const modulePath = this.workspace.modulePaths.get(word)
+        if (modulePath) return fileLocation(modulePath)
+
+        // Try as a construct name across all modules
+        for (const [key, filePath] of this.workspace.constructPaths) {
+            if (key.split('/')[1] === word) {
+                return fileLocation(filePath)
+            }
+        }
+
+        return null
+    }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+
+/**
+ * Converts a file:// URI to a filesystem path.
+ */
+function uriToPath(uri: string): string {
+    return decodeURIComponent(uri.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1'))
+}
+
+/**
+ * Converts a filesystem path to a file:// URI.
+ */
+function pathToUri(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/')
+    return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+}
+
+/**
+ * Returns an LSP Location pointing to the start of a file.
+ * Used when the exact token position within the file is not yet resolved.
+ */
+function fileLocation(filePath: string): Location {
+    return {
+        uri: pathToUri(filePath),
+        range: Range.create(Position.create(0, 0), Position.create(0, 0)),
+    }
+}
+
+/**
+ * Returns true if the character is valid inside a WORDS identifier.
+ */
+function isIdentChar(ch: string): boolean {
+    return /[A-Za-z0-9_]/.test(ch)
+}
+
+/**
+ * Converts a WORDS parser Diagnostic to an LSP Diagnostic.
+ */
+function toLspDiagnostic(diagnostic: Diagnostic): LspDiagnostic {
+    return {
+        range: Range.create(
+            Position.create(diagnostic.range.start.line, diagnostic.range.start.character),
+            Position.create(diagnostic.range.end.line, diagnostic.range.end.character)
+        ),
+        severity: toLspSeverity(diagnostic.severity),
+        code: diagnostic.code,
+        source: `words-${diagnostic.source}`,
+        message: diagnostic.message,
+    }
+}
+
+/**
+ * Maps a WORDS DiagnosticSeverity to an LSP DiagnosticSeverity.
+ */
+function toLspSeverity(severity: DiagnosticSeverity): LspDiagnosticSeverity {
+    switch (severity) {
+        case 'error': return LspDiagnosticSeverity.Error
+        case 'warning': return LspDiagnosticSeverity.Warning
+        case 'hint': return LspDiagnosticSeverity.Hint
+    }
+}

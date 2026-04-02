@@ -9,7 +9,7 @@
         "build:watch": "tsc --watch"
     },
     "dependencies": {
-        "@words-lang/parser": "*",
+        "@words-lang/parser": "^0.1.0",
         "vscode-languageserver": "^9.0.1",
         "vscode-languageserver-textdocument": "^1.0.11"
     },

@@ -4,6 +4,10 @@
     "description": "Standalone parser and semantic analyser for the WORDS specification language",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "files": [
+        "dist",
+        "src"
+    ],
     "license": "MIT",
     "scripts": {
         "build": "tsc",

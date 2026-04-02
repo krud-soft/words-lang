@@ -1,6 +1,6 @@
 {
     "name": "@words-lang/parser",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Standalone parser and semantic analyser for the WORDS specification language",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -19,5 +19,10 @@
         "@types/node": "^25.5.0",
         "typescript": "^5.3.0",
         "vitest": "^1.0.0"
-    }
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/krud-soft/words-lang"
+    },
+    "homepage": "https://krud-soft.github.io/words/"
 }

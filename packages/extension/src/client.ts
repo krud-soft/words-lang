@@ -24,9 +24,9 @@ let client: LanguageClient | undefined
  * Creates the LSP client and starts the server process.
  */
 export function activate(context: ExtensionContext): void {
-    // Path to the compiled server entry point
+    // Path to the compiled server entry point — bundled inside the extension
     const serverModule = context.asAbsolutePath(
-        path.join('..', 'lsp', 'dist', 'server.js')
+        path.join('dist', 'server', 'server.js')
     )
 
     // Run the server in a separate Node.js process.

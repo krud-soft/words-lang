@@ -245,7 +245,6 @@ describe('Analyser — valid TestApp project', () => {
 
     it('loads all files without parse errors', () => {
         const parseErrors = workspace.allParseDiagnostics()
-        console.log(parseErrors.map(e => `${e.filePath}: ${e.diagnostic.message}`))
         expect(parseErrors).toHaveLength(0)
     })
 

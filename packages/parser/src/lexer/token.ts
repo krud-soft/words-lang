@@ -14,7 +14,7 @@
  * Grouped by category:
  *   - Top-level construct keywords  (system, module, state, ...)
  *   - Block keywords                (modules, props, uses, returns, ...)
- *   - Process / transition keywords (when, enter, switch)
+ *   - Process / transition keywords (when, enter)
  *   - Control flow keywords         (if, for, as, is, is not)
  *   - Primitive types               (tstring, tinteger, ...)
  *   - Literals                      (string_lit, integer_lit, ...)
@@ -24,6 +24,11 @@
  *
  * Enum values are the string representation of each token — useful for
  * readable error messages and debug output without a separate lookup table.
+ *
+ * Note on naming conventions: method names, callback prop names, and handler
+ * method names (including names like `switch`, `onLoad`, `onSubmit`) are all
+ * plain camelCase identifiers chosen by the designer. None of them are
+ * reserved keywords in the WORDS language.
  */
 export enum TokenType {
 
@@ -127,17 +132,11 @@ export enum TokenType {
    */
   Enter = 'enter',
 
-  /**
-   * `switch` — opens the dispatch body inside an `implements` block.
-   * e.g. `switch path(string) (`
-   */
-  Switch = 'switch',
-
   // ── Control flow keywords ─────────────────────────────────────────────────
 
   /**
    * `if` — opens a conditional block inside a `uses` block or an
-   * `implements` switch body.
+   * `implements` handler body.
    * e.g. `if state.context is AccountDeauthenticated (`
    */
   If = 'if',
@@ -235,9 +234,9 @@ export enum TokenType {
 
   /**
    * A camelCase identifier — names a prop, method, argument, or iteration variable.
-   * Callback prop names like `onSubmit`, `onConfirm`, `onLoad`, `onDismiss` are
-   * all plain camelCase identifiers — there is no special keyword for them.
-   * e.g. `onSubmit`, `credentials`, `fullName`, `notification`, `onLoad`
+   * This includes all designer-chosen names: callback prop names, method names,
+   * and handler method names regardless of what they are called.
+   * e.g. `onSubmit`, `credentials`, `fullName`, `notification`, `switch`, `onLoad`
    */
   CamelIdent = 'camel_ident',
 

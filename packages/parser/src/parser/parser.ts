@@ -283,7 +283,7 @@ export class Parser {
      *   module ModuleName "description" (
      *     process ... ( when ... )
      *     start StateName
-     *     implements Module.Handler ( switch ... )
+     *     implements Module.Handler ( methodName param(Type) ( if ... ) )
      *     system.Module.subscribeRoute ...
      *     interface HandlerName ( ... )
      *   )
@@ -423,11 +423,14 @@ export class Parser {
     /**
      * Parses:
      *   implements Module.HandlerInterface (
-     *     switch param(Type) (
+     *     methodName param(Type) (
      *       if param is "/path"
      *         enter State "narrative"
      *     )
      *   )
+     *
+     * The method name (e.g. `switch`) is a plain camelCase identifier chosen
+     * by the designer on the handler interface — it is not a reserved keyword.
      */
     private parseImplements(): ImplementsHandlerNode {
         const tok = this.expect(TokenType.Implements)!
@@ -437,10 +440,13 @@ export class Parser {
         this.expect(TokenType.LParen)
         this.skipTrivia()
 
-        // switch param(Type) ( ... )
-        this.expect(TokenType.Switch)
+        // handler method name param(Type) ( ... )
+        // The method name (e.g. `switch`) is a plain camelCase name chosen by the
+        // designer on the handler interface — it is not a reserved keyword.
+        // We consume the method name then the parameter name and its type.
+        this.expectIdent('handler method name') // e.g. 'switch' — consumed but not stored
         this.skipTrivia()
-        const switchParam = this.expectIdent('switch parameter name')
+        const switchParam = this.expectIdent('handler method parameter name')
         this.skipTrivia()
         this.expect(TokenType.LParen)
         const switchParamType = this.parseType()
@@ -459,7 +465,7 @@ export class Parser {
             }
         }
 
-        this.expect(TokenType.RParen) // close switch body
+        this.expect(TokenType.RParen) // close method body
         this.skipTrivia()
         this.expect(TokenType.RParen) // close implements body
 
@@ -467,7 +473,7 @@ export class Parser {
     }
 
     /**
-     * Parses one branch inside an implements switch body:
+     * Parses one branch inside an implements handler body:
      *   if param is "/path"
      *     enter State "narrative"
      */
@@ -754,6 +760,10 @@ export class Parser {
      *     methodName param(Type) returns(Type) "description"
      *     ...
      *   )
+     *
+     * When used as a module-level handler interface, the body contains a
+     * method declaration whose body is a series of `if` branches. The method
+     * name (e.g. `switch`) is a plain camelCase identifier — not a keyword.
      */
     private parseInterface(): InterfaceNode {
         const tok = this.expect(TokenType.Interface)!
@@ -784,8 +794,10 @@ export class Parser {
             } else if (this.check(TokenType.Uses)) {
                 uses.push(...this.parseUsesBlock())
             } else if (this.check(TokenType.CamelIdent)) {
-                // Methods appear directly in the body after props
-                methods.push(this.parseMethod())
+                // Methods appear directly in the body after props.
+                // This includes handler interface method declarations whose body
+                // contains if-branches (e.g. `switch path(string) ( if ... )`).
+                methods.push(this.parseInterfaceMethod())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
@@ -893,7 +905,7 @@ export class Parser {
         const entries: UseEntryNode[] = []
         let lastPos = -1
         while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            if (this.pos === lastPos) { this.advance(); continue }  // ← guard
+            if (this.pos === lastPos) { this.advance(); continue }
             lastPos = this.pos
             this.skipTrivia()
             if (this.check(TokenType.RParen)) break
@@ -1065,7 +1077,7 @@ export class Parser {
         const args: ArgumentNode[] = []
         let lastPos = -1
         while (this.checkArgumentStart()) {
-            if (this.pos === lastPos) break  // ← guard
+            if (this.pos === lastPos) break
             lastPos = this.pos
             args.push(this.parseArgument())
             this.skipTrivia()
@@ -1283,8 +1295,8 @@ export class Parser {
             const args = this.parseArguments()
             if (args.length === 0 && this.check(TokenType.PascalIdent)) {
                 const valTok = this.current()
-                const name = this.advance().value
-                const value: AccessExpressionNode = { kind: 'AccessExpression', token: valTok, path: [name] }
+                const valName = this.advance().value
+                const value: AccessExpressionNode = { kind: 'AccessExpression', token: valTok, path: [valName] }
                 args.push({ kind: 'Argument', token: valTok, name: '', value })
             }
             this.expect(TokenType.RParen)
@@ -1414,11 +1426,9 @@ export class Parser {
                     this.expect(TokenType.RParen)
                 }
             }
-            // else: name with no type — interaction prop with no payload
 
             this.skipTrivia()
 
-            // Optional default value: is "default" / is 0 / is false / is [] / is {}
             if (this.check(TokenType.Is)) {
                 this.advance()
                 this.skipTrivia()
@@ -1436,8 +1446,7 @@ export class Parser {
     // ── Types ──────────────────────────────────────────────────────────────────
 
     /**
-     * Parses a type annotation. Called after consuming the opening `(` of a
-     * type annotation — i.e. the cursor is on the type keyword or name.
+     * Parses a type annotation. Called when the cursor is on the type keyword or name.
      */
     private parseType(): TypeNode {
         const tok = this.current()
@@ -1497,13 +1506,23 @@ export class Parser {
     // ── Methods ────────────────────────────────────────────────────────────────
 
     /**
-     * Parses a method declaration in a provider, adapter, or interface body.
+     * Parses a standard method declaration in a provider, adapter, or interface body.
+     * Delegates to `parseInterfaceMethod` which also handles handler method bodies.
+     */
+    private parseMethod(): MethodNode {
+        return this.parseInterfaceMethod()
+    }
+
+    /**
+     * Parses a method declaration that may optionally have a body block of
+     * `if` branches — used for handler interface method declarations.
      *
      * Forms:
      *   `methodName "description"`
      *   `methodName param(Type) returns(Type) "description"`
+     *   `methodName param(Type) ( if param is "/path" enter State "narrative" )`
      */
-    private parseMethod(): MethodNode {
+    private parseInterfaceMethod(): MethodNode {
         const tok = this.current()
         const name = this.advance().value // camelIdent
         this.skipTrivia()
@@ -1527,6 +1546,20 @@ export class Parser {
             this.skipTrivia()
         }
 
+        // Handler interface method body: ( if ... enter ... )
+        // Consume and discard — the body is structural metadata, not executable logic.
+        if (this.check(TokenType.LParen)) {
+            this.advance()
+            let depth = 1
+            while (!this.check(TokenType.EOF) && depth > 0) {
+                if (this.check(TokenType.LParen)) depth++
+                else if (this.check(TokenType.RParen)) depth--
+                if (depth > 0) this.advance()
+            }
+            this.expect(TokenType.RParen)
+            return { kind: 'Method', token: tok, name, params, returnType: null, description: null }
+        }
+
         // Optional returns(Type)
         if (this.check(TokenType.Returns)) {
             this.advance()
@@ -1547,8 +1580,7 @@ export class Parser {
     // ── Qualified name ─────────────────────────────────────────────────────────
 
     /**
-     * Parses a dot-separated qualified name — a sequence of PascalCase or
-     * camelCase segments joined by dots.
+     * Parses a dot-separated qualified name.
      * e.g. `UIModule.LoginForm`, `system.setContext`, `SessionAdapter.checkSession`
      */
     private parseQualifiedName(): QualifiedName {

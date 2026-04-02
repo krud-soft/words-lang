@@ -24,9 +24,9 @@
  * - Comments are included in the token stream (not silently discarded) so the
  *   parser can attach them to adjacent nodes for hover documentation.
  *
- * - Callback prop names such as `onLoad`, `onSubmit`, `onConfirm` are plain
- *   camelCase identifiers — they carry no special meaning to the lexer. The
- *   parser interprets them purely from their position in the token stream.
+ * - Method names, callback prop names, and handler method names are all plain
+ *   camelCase identifiers. Names like `switch`, `onLoad`, `onSubmit` carry no
+ *   special meaning to the lexer — they are emitted as CamelIdent tokens.
  *
  * - Position tracking (line, column, offset) is maintained for every token
  *   so the LSP can report diagnostics and resolve go-to-definition requests
@@ -45,9 +45,12 @@ import { Token, TokenType, token } from './token'
  * Note: `true` and `false` are listed here so they are never accidentally
  * emitted as plain identifiers.
  *
- * Callback prop names (`onLoad`, `onSubmit`, `onConfirm`, etc.) are
- * intentionally NOT in this table — they are user-defined camelCase names
- * and must be treated as plain CamelIdent tokens.
+ * Intentionally NOT in this table — these are all plain camelCase names
+ * chosen by the designer with no special language meaning:
+ *   - Method names (e.g. `switch`, `login`, `getProducts`, `clear`)
+ *   - Callback prop names (e.g. `onSubmit`, `onConfirm`, `onLoad`, `onDismiss`)
+ *   - Handler method names (e.g. `switch` on a handler interface)
+ *   - Iteration variables (e.g. `notification`, `category`)
  */
 const KEYWORDS: Record<string, TokenType> = {
     system: TokenType.System,
@@ -69,7 +72,6 @@ const KEYWORDS: Record<string, TokenType> = {
     implements: TokenType.Implements,
     when: TokenType.When,
     enter: TokenType.Enter,
-    switch: TokenType.Switch,
     if: TokenType.If,
     for: TokenType.For,
     as: TokenType.As,
@@ -189,8 +191,9 @@ export class Lexer {
                     // PascalCase → construct name or type reference
                     this.tokens.push(token(TokenType.PascalIdent, ident, startLine, startCol, start))
                 } else {
-                    // camelCase → prop name, method name, callback name, or iteration variable.
-                    // This includes onLoad, onSubmit, onConfirm, and all other callback props.
+                    // camelCase → prop name, method name, handler method name, or
+                    // iteration variable. This includes all designer-chosen names
+                    // such as `switch`, `onLoad`, `onSubmit`, `onConfirm`, etc.
                     this.tokens.push(token(TokenType.CamelIdent, ident, startLine, startCol, start))
                 }
                 continue

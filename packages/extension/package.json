@@ -1,0 +1,61 @@
+{
+    "name": "words-lang",
+    "displayName": "WORDS Specification Language",
+    "description": "Syntax highlighting for .wds files and ```wds code fences in Markdown",
+    "version": "0.1.0",
+    "publisher": "KRUDSoftware",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/krud-soft/words-lang"
+    },
+    "license": "MIT",
+    "icon": "./icons/wds.png",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "iconThemes": [
+            {
+                "id": "words-icons",
+                "label": "WORDS Icons",
+                "path": "./icons/words-icon-theme.json"
+            }
+        ],
+        "languages": [
+            {
+                "id": "wds",
+                "aliases": [
+                    "WORDS Spec",
+                    "wds"
+                ],
+                "extensions": [
+                    ".wds"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "wds",
+                "scopeName": "source.wds",
+                "path": "./syntaxes/wds.tmGrammar.json"
+            },
+            {
+                "scopeName": "markdown.wds.codeblock",
+                "path": "./syntaxes/wds.markdown-injection.json",
+                "injectTo": [
+                    "text.html.markdown"
+                ],
+                "embeddedLanguages": {
+                    "meta.embedded.block.wds": "wds"
+                }
+            }
+        ]
+    },
+    "scripts": {
+        "package": "vsce package --no-dependencies"
+    }
+}

@@ -8,5 +8,4 @@
 !syntaxes/wds.tmGrammar.json
 !syntaxes/wds.markdown-injection.json
 !dist/client.js
-!dist/server/**
-!dist/parser/**
+!dist/server/server.js

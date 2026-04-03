@@ -2,7 +2,7 @@
     "name": "words-lang",
     "displayName": "WORDS Specification Language",
     "description": "Syntax highlighting for .wds files and ```wds code fences in Markdown",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "publisher": "KRUDSoftware",
     "repository": {
         "type": "git",
@@ -18,11 +18,10 @@
     ],
     "main": "./dist/client.js",
     "scripts": {
-        "build": "tsc",
+        "build": "node scripts/bundle.js",
         "list": "vsce ls",
         "build:watch": "tsc --watch",
-        "copy": "node scripts/copy-deps.js",
-        "package": "npm run build && npm run copy && vsce package --no-dependencies"
+        "package": "npm run build && vsce package --no-dependencies"
     },
     "dependencies": {
         "vscode-languageclient": "^9.0.1"
@@ -30,6 +29,7 @@
     "devDependencies": {
         "@types/node": "^20.0.0",
         "@types/vscode": "^1.74.0",
+        "esbuild": "^0.21.5",
         "typescript": "^5.3.0"
     },
     "contributes": {

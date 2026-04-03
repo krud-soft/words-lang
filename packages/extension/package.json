@@ -33,13 +33,6 @@
         "typescript": "^5.3.0"
     },
     "contributes": {
-        "iconThemes": [
-            {
-                "id": "words-icons",
-                "label": "WORDS Icons",
-                "path": "./icons/words-icon-theme.json"
-            }
-        ],
         "languages": [
             {
                 "id": "wds",

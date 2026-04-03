@@ -4,7 +4,6 @@
 !README.md
 !LICENSE
 !icons/wds.png
-!icons/words-icon-theme.json
 !syntaxes/wds.tmGrammar.json
 !syntaxes/wds.markdown-injection.json
 !dist/client.js

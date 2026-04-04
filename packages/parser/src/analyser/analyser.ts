@@ -328,7 +328,11 @@ export class Analyser {
                             `Handler '${arg.name}' expects argument '${prop.argName}', not '${returnStmt.contextName}'`,
                             returnStmt.token
                         )
-                    } else if (prop.type?.kind === 'NamedType' && !validReturns.has(prop.type.name)) {
+                    } else if (
+                        prop.type?.kind === 'NamedType' &&
+                        prop.type.name !== '?' &&      // '?' is the sentinel for a parse-error type — already reported
+                        !validReturns.has(prop.type.name)
+                    ) {
                         // Arg name matches but the prop's type is not a declared return context
                         this.report(
                             filePath,

@@ -1427,8 +1427,18 @@ export class Parser {
                 this.skipTrivia()
                 if (this.check(TokenType.LParen)) {
                     this.advance()
-                    type = this.parseType()
-                    if (!this.expect(TokenType.RParen)) this.syncToClosingParen()
+                    if (this.check(TokenType.RParen)) {
+                        // argName() — parens present but type is missing
+                        this.error(
+                            DiagnosticCode.P_EMPTY_HANDLER_ARG_TYPE,
+                            `Handler argument '${argName}' has no type — declare a type like ${argName}(ContextType)`,
+                            this.current()
+                        )
+                        this.advance() // consume ')'
+                    } else {
+                        type = this.parseType()
+                        if (!this.expect(TokenType.RParen)) this.syncToClosingParen()
+                    }
                 }
             }
 

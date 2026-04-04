@@ -91,6 +91,12 @@ export enum DiagnosticCode {
     /** An `is` keyword was expected in an argument assignment but not found. */
     P_MISSING_IS = 'P010',
 
+    /**
+     * A handler prop argument was declared with empty parentheses — the type
+     * is missing. e.g. `onSubmit credentials()` should be `onSubmit credentials(ContextType)`.
+     */
+    P_EMPTY_HANDLER_ARG_TYPE = 'P011',
+
     // ── Analyser errors ─────────────────────────────────────────────────────────
 
     /**

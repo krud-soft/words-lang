@@ -277,15 +277,23 @@ export class WordsConnection {
  * Converts a file:// URI to a filesystem path.
  */
 function uriToPath(uri: string): string {
-    return decodeURIComponent(uri.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1'))
+    let path = decodeURIComponent(uri.replace(/^file:\/\/\//, '').replace(/^file:\/\//, ''))
+    // On Windows: /C:/Users/... → C:/Users/...
+    path = path.replace(/^\/([A-Za-z]:)/, '$1')
+    // Normalize to OS separator
+    return path.replace(/\//g, require('path').sep)
 }
 
 /**
  * Converts a filesystem path to a file:// URI.
  */
 function pathToUri(filePath: string): string {
+    // Normalize to forward slashes
     const normalized = filePath.replace(/\\/g, '/')
-    return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+    // Windows: C:/... → /C:/...
+    return normalized.match(/^[A-Za-z]:/)
+        ? `file:///${normalized}`
+        : `file://${normalized}`
 }
 
 /**

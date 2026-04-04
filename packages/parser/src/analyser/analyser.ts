@@ -29,13 +29,14 @@ import {
 } from './diagnostics'
 import {
     StateNode,
-    ScreenNode,
     SimpleReturnsNode,
     ExpandedReturnsNode,
     UseEntryNode,
+    ComponentUseNode,
     BlockExpressionNode,
     StateReturnStatementNode,
-    ArgumentNode,
+    PropNode,
+    QualifiedName,
 } from '../parser/ast'
 
 // ── AnalysisResult ────────────────────────────────────────────────────────────
@@ -259,7 +260,7 @@ export class Analyser {
                 const validReturns = new Set(this.extractReturnedContexts(enclosingState))
 
                 // Walk the screen's uses tree and check every state.return()
-                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName)
             }
         }
     }
@@ -271,35 +272,89 @@ export class Analyser {
         uses: UseEntryNode[],
         validReturns: Set<string>,
         filePath: string,
-        screenNode: ScreenNode
+        enclosingModuleName: string
     ): void {
         for (const entry of uses) {
             if (entry.kind === 'ComponentUse') {
-                this.checkStateReturnsInArgs(entry.args, validReturns, filePath)
-                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, screenNode)
+                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName)
             } else if (entry.kind === 'ConditionalBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
             } else if (entry.kind === 'IterationBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
             }
         }
     }
 
     /**
-     * Checks arguments for block expressions containing state.return() calls.
+     * For each BlockExpression arg on a component use, validates every
+     * state.return() call inside it.
+     *
+     * Two cases, determined by the target view's prop declaration for that arg:
+     *
+     *   - Prop has a named argument (e.g. `onSubmit credentials(AccountCredentials)`):
+     *       state.return(x) must use x = argName. If it doesn't → A010.
+     *       If it does, the prop's type must match a context in state's returns → A008.
+     *
+     *   - Prop has no named argument (e.g. `onPress`):
+     *       state.return(x) treats x as a direct context name → A008 if not in returns.
+     *
+     * If the target view cannot be resolved, falls back to the direct context check.
      */
     private checkStateReturnsInArgs(
-        args: ArgumentNode[],
+        componentUse: ComponentUseNode,
         validReturns: Set<string>,
-        filePath: string
+        filePath: string,
+        enclosingModuleName: string
     ): void {
-        for (const arg of args) {
-            if (arg.value.kind === 'BlockExpression') {
-                const block = arg.value as BlockExpressionNode
-                for (const stmt of block.statements) {
-                    if (stmt.kind === 'StateReturnStatement') {
-                        const returnStmt = stmt as StateReturnStatementNode
-                        if (!validReturns.has(returnStmt.contextName)) {
+        const viewProps = this.resolveViewProps(componentUse.name, enclosingModuleName)
+
+        for (const arg of componentUse.args) {
+            if (arg.value.kind !== 'BlockExpression') continue
+
+            const block = arg.value as BlockExpressionNode
+            for (const stmt of block.statements) {
+                if (stmt.kind !== 'StateReturnStatement') continue
+
+                const returnStmt = stmt as StateReturnStatementNode
+                const prop = viewProps?.find(p => p.name === arg.name) ?? null
+
+                if (prop?.argName) {
+                    // Prop declares a named argument — state.return(x) must use that name
+                    if (returnStmt.contextName !== prop.argName) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_HANDLER_ARG,
+                            `Handler '${arg.name}' expects argument '${prop.argName}', not '${returnStmt.contextName}'`,
+                            returnStmt.token
+                        )
+                    } else if (prop.type?.kind === 'NamedType' && !validReturns.has(prop.type.name)) {
+                        // Arg name matches but the prop's type is not a declared return context
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_STATE_RETURN,
+                            `Prop '${arg.name}' argument type '${prop.type.name}' does not match any context in the enclosing state's returns clause`,
+                            returnStmt.token
+                        )
+                    }
+                } else {
+                    // Prop has no named argument — state.return(x) must be a direct context name.
+                    //
+                    // If the view was resolved and the prop was found, a camelCase x is a clear
+                    // signal that the user is treating it as an argument reference (e.g. wrote
+                    // state.return(backToDashboard) when onBackToDashboard has no argument).
+                    // Report A010 in that case so the error points at the handler definition.
+                    // A PascalCase x is a context name attempt — fall through to A008.
+                    if (!validReturns.has(returnStmt.contextName)) {
+                        const looksLikeArgRef = prop !== null && /^[a-z]/.test(returnStmt.contextName)
+                        if (looksLikeArgRef) {
+                            this.report(
+                                filePath,
+                                DiagnosticCode.A_INVALID_HANDLER_ARG,
+                                `Handler '${arg.name}' has no argument — '${returnStmt.contextName}' is not a declared argument`,
+                                returnStmt.token
+                            )
+                        } else {
                             this.report(
                                 filePath,
                                 DiagnosticCode.A_INVALID_STATE_RETURN,
@@ -311,6 +366,24 @@ export class Analyser {
                 }
             }
         }
+    }
+
+    /**
+     * Resolves the props of a view component by its qualified name.
+     * Returns null if the view is not found in the workspace.
+     *
+     * For unqualified names (e.g. `DiagnosisConfirmation`), the enclosing
+     * module is used. For qualified names (e.g. `UIModule.LoginForm`), the
+     * first part is the module name.
+     */
+    private resolveViewProps(name: QualifiedName, enclosingModuleName: string): PropNode[] | null {
+        const moduleName = name.parts.length === 1 ? enclosingModuleName : name.parts[0]
+        const viewName = name.parts[name.parts.length - 1]
+
+        const viewMap = this.workspace.views.get(moduleName)
+        if (!viewMap) return null
+        const view = viewMap.get(viewName)
+        return view ? view.props : null
     }
 
     // ── Rule A007 — Ownership declarations match construct modules ─────────────

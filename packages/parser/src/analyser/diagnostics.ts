@@ -148,6 +148,16 @@ export enum DiagnosticCode {
      */
     A_UNDEFINED_INTERFACE = 'A009',
 
+    /**
+     * A `state.return(x)` call inside a prop callback references an argument
+     * name that does not match the argument declared on that handler prop,
+     * or the handler prop declares no argument at all.
+     *
+     * e.g. `onSubmit` declares `credentials(AccountCredentials)` but the screen
+     * writes `state.return(badName)` instead of `state.return(credentials)`.
+     */
+    A_INVALID_HANDLER_ARG = 'A010',
+
     // ── Warnings ────────────────────────────────────────────────────────────────
 
     /**

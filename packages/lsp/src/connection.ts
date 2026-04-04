@@ -277,7 +277,8 @@ export class WordsConnection {
  * Converts a file:// URI to a filesystem path.
  */
 function uriToPath(uri: string): string {
-    let path = decodeURIComponent(uri.replace(/^file:\/\/\//, '').replace(/^file:\/\//, ''))
+    // Strip "file://" — leaves "/Users/..." on Mac/Linux, "/C:/..." on Windows
+    let path = decodeURIComponent(uri.replace(/^file:\/\//, ''))
     // On Windows: /C:/Users/... → C:/Users/...
     path = path.replace(/^\/([A-Za-z]:)/, '$1')
     // Normalize to OS separator

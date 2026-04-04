@@ -1505,6 +1505,11 @@ export class Parser {
         }
 
         this.error(DiagnosticCode.P_MISSING_TYPE, `Expected a type`, typeTok)
+        // Consume the unrecognized token so the caller's expect(')') can succeed.
+        // Don't advance past ')' or ',' — those are delimiters the caller depends on.
+        if (!this.check(TokenType.RParen) && !this.check(TokenType.Comma) && !this.check(TokenType.EOF)) {
+            this.advance()
+        }
         return { kind: 'NamedType', token: typeTok, name: '?', optional: false } as NamedTypeNode
     }
 

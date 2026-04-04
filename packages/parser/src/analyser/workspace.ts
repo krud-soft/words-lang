@@ -272,6 +272,8 @@ export class Workspace {
 
         if (parseResult.diagnostics.length > 0) {
             this.parseDiagnostics.set(filePath, parseResult.diagnostics)
+        } else {
+            this.parseDiagnostics.delete(filePath)
         }
     }
 

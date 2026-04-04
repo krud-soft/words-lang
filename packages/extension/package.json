@@ -2,7 +2,7 @@
     "name": "words-lang",
     "displayName": "WORDS Specification Language",
     "description": "Syntax highlighting for .wds files and ```wds code fences in Markdown",
-    "version": "0.2.4",
+    "version": "0.2.5",
     "publisher": "KRUDSoftware",
     "repository": {
         "type": "git",

@@ -3,6 +3,8 @@
 
 Syntax highlighting for the [WORDS specification language](https://krud-soft.github.io/words/) in VS Code.
 
+> **Work in progress.** This extension is experimental and not yet production-ready. Expect rough edges and missing functionality.
+
 ## Features
 
 - Syntax highlighting for `.wds` files

@@ -504,6 +504,8 @@ export class Parser {
         this.skipTrivia()
         const name = this.expectIdent('state name')
         this.skipTrivia()
+        this.parseOptionalString()
+        this.skipTrivia()
 
         // Optional receives clause
         let receives: string | null = null
@@ -552,6 +554,8 @@ export class Parser {
         const tok = this.expect(TokenType.Context)!
         this.skipTrivia()
         const name = this.expectIdent('context name')
+        this.skipTrivia()
+        this.parseOptionalString()
         this.skipTrivia()
         this.expect(TokenType.LParen)
         const fields = this.parsePropList()

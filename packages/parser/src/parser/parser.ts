@@ -47,6 +47,7 @@ import {
     PropNode,
     MethodNode,
     TypeNode,
+    PrimitiveType,
     PrimitiveTypeNode,
     ListTypeNode,
     MapTypeNode,
@@ -1418,8 +1419,8 @@ export class Parser {
                 // name(Type) — direct type annotation
                 this.advance()
                 type = this.parseType()
-                this.expect(TokenType.RParen)
-                optional = optional || (type.kind === 'NamedType' && type.optional)
+                if (!this.expect(TokenType.RParen)) this.syncToClosingParen()
+                optional = optional || ('optional' in type && (type as { optional: boolean }).optional)
             } else if (this.check(TokenType.CamelIdent)) {
                 // name argName(Type) — interaction prop with argument variable
                 argName = this.advance().value
@@ -1427,7 +1428,7 @@ export class Parser {
                 if (this.check(TokenType.LParen)) {
                     this.advance()
                     type = this.parseType()
-                    this.expect(TokenType.RParen)
+                    if (!this.expect(TokenType.RParen)) this.syncToClosingParen()
                 }
             }
 
@@ -1474,7 +1475,13 @@ export class Parser {
             return { kind: 'MapType', token: tok, keyType, valueType } as MapTypeNode
         }
 
-        // Primitive types
+        // Optional flag — applies to both primitives and named types (?string, ?Product)
+        let optional = false
+        if (this.check(TokenType.Question)) {
+            optional = true
+            this.advance()
+        }
+
         // Note: the lexer maps the word 'context' to TokenType.Context (the construct
         // keyword token), never to TContext. We accept both here so 'context' works
         // as a type in system interface methods (e.g. returns(context)).
@@ -1486,25 +1493,19 @@ export class Parser {
             [TokenType.TContext]: 'context',
             [TokenType.Context]: 'context',
         }
-        if (tok.type in primitiveMap) {
+        const typeTok = this.current()
+        if (typeTok.type in primitiveMap) {
             this.advance()
-            return { kind: 'PrimitiveType', token: tok, name: primitiveMap[tok.type] } as PrimitiveTypeNode
-        }
-
-        // Optional named type: ?Product
-        let optional = false
-        if (this.check(TokenType.Question)) {
-            optional = true
-            this.advance()
+            return { kind: 'PrimitiveType', token: typeTok, name: primitiveMap[typeTok.type] as PrimitiveType, optional } as PrimitiveTypeNode
         }
 
         if (this.check(TokenType.PascalIdent)) {
             const name = this.advance().value
-            return { kind: 'NamedType', token: tok, name, optional } as NamedTypeNode
+            return { kind: 'NamedType', token: typeTok, name, optional } as NamedTypeNode
         }
 
-        this.error(DiagnosticCode.P_MISSING_TYPE, `Expected a type`, tok)
-        return { kind: 'NamedType', token: tok, name: '?', optional: false } as NamedTypeNode
+        this.error(DiagnosticCode.P_MISSING_TYPE, `Expected a type`, typeTok)
+        return { kind: 'NamedType', token: typeTok, name: '?', optional: false } as NamedTypeNode
     }
 
     // ── Methods ────────────────────────────────────────────────────────────────
@@ -1699,6 +1700,22 @@ export class Parser {
             return val.slice(1, -1)
         }
         return null
+    }
+
+    /**
+     * Skips tokens until the closing ')' that matches the '(' already consumed.
+     * Used for error recovery inside type annotations — consumes the ')' itself.
+     */
+    private syncToClosingParen(): void {
+        let depth = 0
+        while (!this.check(TokenType.EOF)) {
+            if (this.check(TokenType.LParen)) { depth++; this.advance(); continue }
+            if (this.check(TokenType.RParen)) {
+                if (depth === 0) { this.advance(); return }
+                depth--
+            }
+            this.advance()
+        }
     }
 
     /**

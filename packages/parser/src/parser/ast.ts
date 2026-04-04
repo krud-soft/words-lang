@@ -30,6 +30,7 @@ export type PrimitiveType = 'string' | 'integer' | 'float' | 'boolean' | 'contex
 export interface PrimitiveTypeNode extends BaseNode {
     kind: 'PrimitiveType'
     name: PrimitiveType
+    optional: boolean
 }
 
 /**

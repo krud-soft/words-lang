@@ -132,7 +132,7 @@ export class WordsConnection {
      * the target file and find the exact token position of the construct
      * declaration.
      */
-    private onDefinition(params: DefinitionParams): Location | null {
+    private onDefinition(params: DefinitionParams): Location | Location[] | null {
         if (!this.workspace) return null
 
         const document = this.documents.get(params.textDocument.uri)
@@ -141,9 +141,14 @@ export class WordsConnection {
         const word = this.getWordAtPosition(document, params.position)
         if (!word) return null
 
-        // Try to resolve as a qualified name (Module.Construct or just Construct)
-        const location = this.resolveDefinition(word)
-        return location
+        // `state` inside a component file → show all states that use this component
+        if (word === 'state') {
+            const filePath = uriToPath(params.textDocument.uri)
+            const states = this.resolveStatesUsingComponent(filePath)
+            if (states.length > 0) return states
+        }
+
+        return this.resolveDefinition(word)
     }
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
@@ -333,6 +338,57 @@ export class WordsConnection {
         }
 
         return null
+    }
+
+    /**
+     * Given a component file path, finds all states that `uses` that component
+     * (by screen, view, adapter, provider, or interface name) and returns one
+     * Location per state, pointing to the state's token.
+     */
+    private resolveStatesUsingComponent(componentFilePath: string): Location[] {
+        if (!this.workspace) return []
+
+        // Reverse-look up: which module/name owns this file path?
+        let componentName: string | null = null
+        for (const [key, fp] of this.workspace.constructPaths) {
+            if (fp === componentFilePath) {
+                componentName = key.split('/')[1]
+                break
+            }
+        }
+        if (!componentName) return []
+
+        const locations: Location[] = []
+
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, stateNode] of stateMap) {
+                if (this.stateUsesComponent(stateNode, componentName)) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                    if (filePath) locations.push(tokenLocation(filePath, stateNode.token))
+                }
+            }
+        }
+
+        return locations
+    }
+
+    /**
+     * Returns true if any entry in the state's `uses` tree references `componentName`.
+     */
+    private stateUsesComponent(stateNode: { uses: any[] }, componentName: string): boolean {
+        const checkEntries = (entries: any[]): boolean => {
+            for (const entry of entries) {
+                if (entry.kind === 'ComponentUse') {
+                    const parts: string[] = entry.name.parts
+                    if (parts[parts.length - 1] === componentName) return true
+                    if (checkEntries(entry.uses)) return true
+                } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                    if (checkEntries(entry.body)) return true
+                }
+            }
+            return false
+        }
+        return checkEntries(stateNode.uses)
     }
 }
 

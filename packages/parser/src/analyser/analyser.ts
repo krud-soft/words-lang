@@ -401,7 +401,7 @@ export class Analyser {
 
     /**
      * For every adapter ComponentUseNode across all component uses trees,
-     * validates that each argument name (except `onLoad`) matches a parameter
+     * validates that each argument name matches a parameter
      * declared on the referenced adapter method.
      */
     private checkAdapterUseArgs(): void {
@@ -479,8 +479,6 @@ export class Analyser {
         if (methodParams === null) return // adapter or method not found — skip
 
         for (const arg of use.args) {
-            // `onLoad` is always a valid callback argument on any adapter use
-            if (arg.name === 'onLoad') continue
             if (!methodParams.includes(arg.name)) {
                 const validList = methodParams.length > 0 ? methodParams.join(', ') : 'none'
                 this.report(

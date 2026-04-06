@@ -995,7 +995,15 @@ export class Parser {
             }
             this.expect(TokenType.RParen)
         } else {
-            // Inline arguments without parens: view X key is value, key is value
+            // Inline arguments without parens: adapter X key is value, key is value
+            // Also handles a leading comma before the first arg:
+            //   adapter X, key is value, key2 is value2
+            // Consume the comma only when what follows (past trivia) is an argument
+            // start (CamelIdent), not a new use-entry keyword or closing token.
+            if (this.check(TokenType.Comma) && this.peekPastTriviaIsCamelIdent()) {
+                this.advance() // consume the leading comma
+                this.skipTrivia()
+            }
             if (this.checkArgumentStart()) {
                 args.push(...this.parseInlineArgList())
             }
@@ -1784,6 +1792,21 @@ export class Parser {
      */
     private checkArgumentStart(): boolean {
         return this.check(TokenType.CamelIdent)
+    }
+
+    /**
+     * Returns true if the first non-trivia token after the current position
+     * is a CamelIdent. Used to decide whether a comma starts an inline argument
+     * list rather than separating two use entries.
+     */
+    private peekPastTriviaIsCamelIdent(): boolean {
+        let i = this.pos + 1
+        while (i < this.tokens.length) {
+            const t = this.tokens[i]
+            if (t.type === TokenType.Newline || t.type === TokenType.Comment) { i++; continue }
+            return t.type === TokenType.CamelIdent
+        }
+        return false
     }
 
     /**

@@ -1585,13 +1585,22 @@ export class Parser {
         let returnType: TypeNode | null = null
         let description: string | null = null
 
-        // Parse parameters: paramName(Type) ...
-        while (this.check(TokenType.CamelIdent)) {
+        // Parse parameters: paramName(Type) or `context is TypeName`
+        while (this.check(TokenType.CamelIdent) || this.check(TokenType.Context)) {
             const paramTok = this.current()
             const paramName = this.advance().value
             this.skipTrivia()
             let paramType: TypeNode | null = null
-            if (this.check(TokenType.LParen)) {
+            if (this.check(TokenType.Is)) {
+                // `context is TypeName` — keyword-style context binding
+                this.advance() // consume 'is'
+                this.skipTrivia()
+                if (this.check(TokenType.PascalIdent)) {
+                    const typeTok = this.current()
+                    const typeName = this.advance().value
+                    paramType = { kind: 'NamedType', token: typeTok, name: typeName } as NamedTypeNode
+                }
+            } else if (this.check(TokenType.LParen)) {
                 this.advance()
                 paramType = this.parseType()
                 this.expect(TokenType.RParen)

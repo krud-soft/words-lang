@@ -164,6 +164,14 @@ export enum DiagnosticCode {
      */
     A_INVALID_HANDLER_ARG = 'A010',
 
+    /**
+     * An argument passed to an adapter use does not match any parameter declared
+     * on that adapter method.
+     * e.g. `DoctorAdapter.getCase onLoad is (...)` where `getCase` declares no
+     * parameter named `onLoad`. Use the method's declared parameter names instead.
+     */
+    A_UNKNOWN_ADAPTER_ARG = 'A011',
+
     // ── Warnings ────────────────────────────────────────────────────────────────
 
     /**

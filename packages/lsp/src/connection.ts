@@ -141,10 +141,11 @@ export class WordsConnection {
         const word = this.getWordAtPosition(document, params.position)
         if (!word) return null
 
+        const currentFilePath = uriToPath(params.textDocument.uri)
+
         // `state` inside a component file → show all states that use this component
         if (word === 'state') {
-            const filePath = uriToPath(params.textDocument.uri)
-            const states = this.resolveStatesUsingComponent(filePath)
+            const states = this.resolveStatesUsingComponent(currentFilePath)
             if (states.length > 0) return states
         }
 
@@ -155,7 +156,7 @@ export class WordsConnection {
             if (refs && refs.length > 0) return refs
         }
 
-        return this.resolveDefinition(word)
+        return this.resolveDefinition(word, currentFilePath)
     }
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
@@ -255,7 +256,7 @@ export class WordsConnection {
      *   - `ConstructName`     — searches all modules for a matching construct
      *   - `ModuleName`        — returns the module definition file
      */
-    private resolveDefinition(word: string): Location | null {
+    private resolveDefinition(word: string, currentFilePath?: string): Location | null {
         if (!this.workspace) return null
 
         // Bare `system` keyword → navigate to the system definition file
@@ -272,6 +273,17 @@ export class WordsConnection {
             if (left === 'system') {
                 const modulePath = this.workspace.modulePaths.get(right)
                 if (modulePath) return fileLocation(modulePath)
+            }
+
+            // props.propName → navigate to the prop declaration on the enclosing component.
+            // Search the current file first so self-referential props resolve locally.
+            if (left === 'props') {
+                if (currentFilePath) {
+                    const local = this.resolveViewPropByName(right, currentFilePath)
+                    if (local) return local
+                }
+                const byPropName = this.resolveViewPropByName(right)
+                if (byPropName) return byPropName
             }
 
             // AdapterName.methodName → navigate to the method on the adapter
@@ -417,10 +429,11 @@ export class WordsConnection {
      * Searches all components with props (views, providers, adapters, interfaces)
      * for a prop whose `name` matches — navigates to the prop token.
      */
-    private resolveViewPropByName(propName: string): Location | null {
-        return this.searchComponentProps((prop, filePath) =>
-            prop.name === propName ? tokenLocation(filePath, prop.token) : null
-        )
+    private resolveViewPropByName(propName: string, inFilePath?: string): Location | null {
+        return this.searchComponentProps((prop, filePath) => {
+            if (inFilePath && filePath !== inFilePath) return null
+            return prop.name === propName ? tokenLocation(filePath, prop.token) : null
+        })
     }
 
     /**

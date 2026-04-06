@@ -1178,7 +1178,8 @@ export class Parser {
         if (
             this.check(TokenType.CamelIdent) ||
             this.check(TokenType.State) ||
-            this.check(TokenType.System)
+            this.check(TokenType.System) ||
+            this.check(TokenType.Props)
         ) {
             return this.parseAccessOrCall()
         }
@@ -1279,6 +1280,7 @@ export class Parser {
                 this.check(TokenType.State) ||
                 this.check(TokenType.System) ||
                 this.check(TokenType.Context) ||
+                this.check(TokenType.Props) ||
                 this.check(TokenType.Returns)
             ) {
                 path.push(this.advance().value)
@@ -1349,7 +1351,8 @@ export class Parser {
                 this.check(TokenType.PascalIdent) ||
                 this.check(TokenType.State) ||
                 this.check(TokenType.System) ||
-                this.check(TokenType.Context)
+                this.check(TokenType.Context) ||
+                this.check(TokenType.Props)
             ) {
                 path.push(this.advance().value)
             } else {

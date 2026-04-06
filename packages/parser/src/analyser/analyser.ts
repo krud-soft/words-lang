@@ -74,6 +74,7 @@ export class Analyser {
         this.checkStateReturns()
         this.checkStateReachability()
         this.checkScreenStateReturns()
+        this.checkAdapterUseArgs()
         this.checkOwnershipDeclarations()
 
         return { diagnostics: this.diagnostics }
@@ -396,6 +397,102 @@ export class Analyser {
      * file must have its module field matching the ownerModule.
      * (The module field is filled in by the Workspace during indexing.)
      */
+    // ── Rule A011 — Adapter use arguments match method params ──────────────────
+
+    /**
+     * For every adapter ComponentUseNode across all component uses trees,
+     * validates that each argument name (except `onLoad`) matches a parameter
+     * declared on the referenced adapter method.
+     */
+    private checkAdapterUseArgs(): void {
+        // Collect all (filePath, uses[]) pairs from every construct that has a uses block
+        const usesEntries: Array<{ filePath: string; uses: UseEntryNode[] }> = []
+
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, stateNode] of stateMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: stateNode.uses })
+            }
+        }
+        for (const [moduleName, screenMap] of this.workspace.screens) {
+            for (const [screenName, screenNode] of screenMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: screenNode.uses })
+            }
+        }
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, viewNode] of viewMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: viewNode.uses })
+            }
+        }
+        for (const [moduleName, providerMap] of this.workspace.providers) {
+            for (const [providerName, providerNode] of providerMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${providerName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: (providerNode as any).uses ?? [] })
+            }
+        }
+        for (const [moduleName, ifaceMap] of this.workspace.interfaces) {
+            for (const [ifaceName, ifaceNode] of ifaceMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${ifaceName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: ifaceNode.uses })
+            }
+        }
+
+        for (const { filePath, uses } of usesEntries) {
+            this.checkAdapterArgsInUses(uses, filePath)
+        }
+    }
+
+    private checkAdapterArgsInUses(uses: UseEntryNode[], filePath: string): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                if (entry.componentKind === 'adapter') {
+                    this.validateAdapterArgs(entry as ComponentUseNode, filePath)
+                }
+                this.checkAdapterArgsInUses(entry.uses, filePath)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkAdapterArgsInUses(entry.body, filePath)
+            }
+        }
+    }
+
+    private validateAdapterArgs(use: ComponentUseNode, filePath: string): void {
+        // Resolve adapter and method from the qualified name.
+        // Supported forms: AdapterName.methodName or system.ModuleName.AdapterName.methodName
+        const parts = use.name.parts
+        const methodName = parts[parts.length - 1]
+        const adapterName = parts[parts.length - 2]
+        if (!adapterName || !methodName) return
+
+        // Find the adapter across all modules
+        let methodParams: string[] | null = null
+        for (const [, adapterMap] of this.workspace.adapters) {
+            const adapter = adapterMap.get(adapterName)
+            if (!adapter) continue
+            const method = adapter.methods.find(m => m.name === methodName)
+            if (method) {
+                methodParams = method.params.map(p => p.name)
+                break
+            }
+        }
+        if (methodParams === null) return // adapter or method not found — skip
+
+        for (const arg of use.args) {
+            // `onLoad` is always a valid callback argument on any adapter use
+            if (arg.name === 'onLoad') continue
+            if (!methodParams.includes(arg.name)) {
+                const validList = methodParams.length > 0 ? methodParams.join(', ') : 'none'
+                this.report(
+                    filePath,
+                    DiagnosticCode.A_UNKNOWN_ADAPTER_ARG,
+                    `'${methodName}' has no argument '${arg.name}' (valid: ${validList})`,
+                    arg.token
+                )
+            }
+        }
+    }
+
     private checkOwnershipDeclarations(): void {
         for (const [filePath, record] of this.workspace.files) {
             const doc = record.parseResult.document

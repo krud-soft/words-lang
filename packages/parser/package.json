@@ -1,6 +1,6 @@
 {
     "name": "@words-lang/parser",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Standalone parser and semantic analyser for the WORDS specification language",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -13,7 +13,8 @@
         "build": "tsc",
         "build:watch": "tsc --watch",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "bundle": "tsc && node dist/bundle.js"
     },
     "devDependencies": {
         "@types/node": "^25.5.0",

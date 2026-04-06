@@ -318,6 +318,7 @@ export class Analyser {
                 const returnStmt = stmt as StateReturnStatementNode
                 const prop = viewProps?.find(p => p.name === arg.name) ?? null
 
+                const returnToken = returnStmt.contextNameToken ?? returnStmt.token
                 if (prop?.argName) {
                     // Prop declares a named argument — state.return(x) must use that name
                     if (returnStmt.contextName !== prop.argName) {
@@ -325,7 +326,7 @@ export class Analyser {
                             filePath,
                             DiagnosticCode.A_INVALID_HANDLER_ARG,
                             `Handler '${arg.name}' expects argument '${prop.argName}', not '${returnStmt.contextName}'`,
-                            returnStmt.token
+                            returnToken
                         )
                     } else if (
                         prop.type?.kind === 'NamedType' &&
@@ -338,7 +339,7 @@ export class Analyser {
                             filePath,
                             DiagnosticCode.A_INVALID_STATE_RETURN,
                             `Arg '${prop.argName}' of type '${prop.type.name}' passed to prop '${arg.name}' does not match any context in the enclosing state's returns clause (returns: ${expected})`,
-                            returnStmt.token
+                            returnToken
                         )
                     }
                 } else {
@@ -356,14 +357,14 @@ export class Analyser {
                                 filePath,
                                 DiagnosticCode.A_INVALID_HANDLER_ARG,
                                 `Handler '${arg.name}' has no argument — '${returnStmt.contextName}' is not a declared argument`,
-                                returnStmt.token
+                                returnToken
                             )
                         } else {
                             this.report(
                                 filePath,
                                 DiagnosticCode.A_INVALID_STATE_RETURN,
                                 `state.return('${returnStmt.contextName}') does not match any context in the enclosing state's returns clause`,
-                                returnStmt.token
+                                returnToken
                             )
                         }
                     }
@@ -401,7 +402,7 @@ export class Analyser {
 
     /**
      * For every adapter ComponentUseNode across all component uses trees,
-     * validates that each argument name (except `onLoad`) matches a parameter
+     * validates that each argument name matches a parameter
      * declared on the referenced adapter method.
      */
     private checkAdapterUseArgs(): void {
@@ -479,8 +480,6 @@ export class Analyser {
         if (methodParams === null) return // adapter or method not found — skip
 
         for (const arg of use.args) {
-            // `onLoad` is always a valid callback argument on any adapter use
-            if (arg.name === 'onLoad') continue
             if (!methodParams.includes(arg.name)) {
                 const validList = methodParams.length > 0 ? methodParams.join(', ') : 'none'
                 this.report(

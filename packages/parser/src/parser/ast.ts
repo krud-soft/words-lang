@@ -401,6 +401,8 @@ export interface AssignmentStatementNode extends BaseNode {
 export interface StateReturnStatementNode extends BaseNode {
     kind: 'StateReturnStatement'
     contextName: string
+    /** The token of the argument inside `state.return(x)` — used for precise diagnostics. */
+    contextNameToken: Token
 }
 
 /**

@@ -149,6 +149,15 @@ export class WordsConnection {
             if (states.length > 0) return states
         }
 
+        // Field name inside a props.propName(...) call → navigate to the context field
+        if (/^[a-z]/.test(word)) {
+            const propName = getPropCallPropName(document, params.position)
+            if (propName) {
+                const loc = this.resolveContextFieldInPropCall(word, propName, currentFilePath)
+                if (loc) return loc
+            }
+        }
+
         // Method name in a module inline interface → show implementors (named interface)
         // or callers (anonymous interface)
         if (/^[a-z]/.test(word)) {
@@ -426,6 +435,69 @@ export class WordsConnection {
     }
 
     /**
+     * Resolves a field name inside a `props.propName(...)` call to the matching
+     * field on the context type declared by that prop.
+     *
+     * Steps:
+     *   1. Find the key (`moduleName/componentName`) for `currentFilePath`.
+     *   2. Look up the component's props and find the one named `propName`.
+     *   3. Get the prop's arg type (e.g. `NewCaseData`).
+     *   4. Search workspace contexts for that type and return the field's location.
+     */
+    private resolveContextFieldInPropCall(
+        fieldName: string,
+        propName: string,
+        currentFilePath: string
+    ): Location | null {
+        if (!this.workspace) return null
+
+        // Reverse-look up the module/component key for this file
+        let fileKey: string | null = null
+        for (const [key, fp] of this.workspace.constructPaths) {
+            if (fp === currentFilePath) { fileKey = key; break }
+        }
+        if (!fileKey) return null
+
+        const [ownerModule, componentName] = fileKey.split('/')
+
+        // Find the prop's arg type by searching views, screens, and providers
+        const componentMaps = [
+            this.workspace.views,
+            this.workspace.screens,
+            this.workspace.providers,
+        ]
+        let contextTypeName: string | null = null
+        for (const moduleIndex of componentMaps) {
+            const component = (moduleIndex as any).get(ownerModule)?.get(componentName)
+            if (!component) continue
+            const props: any[] = component.props ?? []
+            const prop = props.find((p: any) => p.name === propName)
+            if (prop?.type?.kind === 'NamedType') {
+                contextTypeName = prop.type.name
+                break
+            }
+        }
+        if (!contextTypeName) return null
+
+        // Search contexts — own module first, then all others
+        const ordered = [
+            [ownerModule, this.workspace.contexts.get(ownerModule)] as const,
+            ...[...this.workspace.contexts.entries()].filter(([m]) => m !== ownerModule),
+        ]
+        for (const [moduleName, contextMap] of ordered) {
+            if (!contextMap) continue
+            const ctx = contextMap.get(contextTypeName)
+            if (!ctx) continue
+            const field = ctx.fields.find((f: any) => f.name === fieldName)
+            if (!field) continue
+            const ctxFilePath = this.workspace.constructPaths.get(`${moduleName}/${contextTypeName}`)
+            if (ctxFilePath) return tokenLocation(ctxFilePath, field.token)
+        }
+
+        return null
+    }
+
+    /**
      * Searches all components with props (views, providers, adapters, interfaces)
      * for a prop whose `name` matches — navigates to the prop token.
      */
@@ -652,6 +724,49 @@ function fileLocation(filePath: string): Location {
  */
 function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_]/.test(ch)
+}
+
+/**
+ * Scans backward from `position` in `document` to determine whether the cursor
+ * sits inside a `props.propName( ... )` argument list. Returns the prop name
+ * (e.g. `onSubmit`) if so, null otherwise.
+ *
+ * Strategy: walk backward tracking paren depth. When depth reaches 0 we found
+ * the matching `(`. Then check that it is immediately preceded by `props.ident`.
+ */
+function getPropCallPropName(document: TextDocument, position: Position): string | null {
+    const text = document.getText()
+    const offset = document.offsetAt(position)
+
+    let depth = 0
+    let i = offset - 1
+    while (i >= 0) {
+        const ch = text[i]
+        if (ch === ')') { depth++; i--; continue }
+        if (ch === '(') {
+            if (depth > 0) { depth--; i--; continue }
+            // depth === 0 — this is our enclosing '('
+            // Walk back past whitespace to find the identifier before it
+            let j = i - 1
+            while (j >= 0 && /[ \t]/.test(text[j])) j--
+            // Read the identifier (propName)
+            const nameEnd = j + 1
+            while (j >= 0 && isIdentChar(text[j])) j--
+            const propName = text.slice(j + 1, nameEnd)
+            if (!propName) return null
+            // Expect a '.' before propName
+            if (j < 0 || text[j] !== '.') return null
+            j--
+            // Read the token before '.'
+            const prefixEnd = j + 1
+            while (j >= 0 && isIdentChar(text[j])) j--
+            const prefix = text.slice(j + 1, prefixEnd)
+            if (prefix === 'props') return propName
+            return null
+        }
+        i--
+    }
+    return null
 }
 
 /**

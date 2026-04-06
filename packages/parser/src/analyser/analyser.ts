@@ -37,6 +37,9 @@ import {
     StateReturnStatementNode,
     PropNode,
     QualifiedName,
+    CallExpressionNode,
+    AccessExpressionNode,
+    ContextNode,
 } from '../parser/ast'
 
 // ── AnalysisResult ────────────────────────────────────────────────────────────
@@ -75,6 +78,7 @@ export class Analyser {
         this.checkStateReachability()
         this.checkScreenStateReturns()
         this.checkAdapterUseArgs()
+        this.checkPropCallContextFields()
         this.checkOwnershipDeclarations()
 
         return { diagnostics: this.diagnostics }
@@ -490,6 +494,102 @@ export class Analyser {
                 )
             }
         }
+    }
+
+    // ── Rule A012 — props.propName(...) provides all context fields ───────────────
+
+    /**
+     * For every `props.propName( fieldName is value, ... )` call expression
+     * found in a component's uses tree, verifies that all required fields of
+     * the context type declared on that prop are provided.
+     *
+     * e.g. if `onSubmit newCaseData(NewCaseData)` is a prop and `NewCaseData`
+     * has five fields, calling `props.onSubmit( photoIds is x )` must include
+     * all five fields — missing ones are reported as A012.
+     */
+    private checkPropCallContextFields(): void {
+        const entries: Array<{ filePath: string; componentProps: PropNode[]; uses: UseEntryNode[]; moduleName: string }> = []
+
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, viewNode] of viewMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: viewNode.props, uses: viewNode.uses, moduleName })
+            }
+        }
+        for (const [moduleName, screenMap] of this.workspace.screens) {
+            for (const [screenName, screenNode] of screenMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: (screenNode as any).props ?? [], uses: screenNode.uses, moduleName })
+            }
+        }
+        for (const [moduleName, providerMap] of this.workspace.providers) {
+            for (const [providerName, providerNode] of providerMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${providerName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: (providerNode as any).props ?? [], uses: (providerNode as any).uses ?? [], moduleName })
+            }
+        }
+
+        for (const { filePath, componentProps, uses, moduleName } of entries) {
+            this.checkPropCallsInUses(uses, componentProps, filePath, moduleName)
+        }
+    }
+
+    private checkPropCallsInUses(
+        uses: UseEntryNode[],
+        componentProps: PropNode[],
+        filePath: string,
+        moduleName: string
+    ): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                const use = entry as ComponentUseNode
+                for (const arg of use.args) {
+                    if (arg.value.kind !== 'CallExpression') continue
+                    const callExpr = arg.value as CallExpressionNode
+                    if (callExpr.callee.kind !== 'AccessExpression') continue
+                    const path = (callExpr.callee as AccessExpressionNode).path
+                    if (path[0] !== 'props' || path.length < 2) continue
+
+                    const propName = path[1]
+                    const prop = componentProps.find(p => p.name === propName)
+                    if (!prop || !prop.argName || !prop.type || prop.type.kind !== 'NamedType') continue
+
+                    const contextTypeName = (prop.type as any).name as string
+                    const context = this.resolveContextByName(contextTypeName, moduleName)
+                    if (!context) continue
+
+                    const providedFields = new Set(callExpr.args.map(a => a.name))
+                    const missingFields = context.fields
+                        .filter(f => !f.optional && !providedFields.has(f.name))
+                        .map(f => f.name)
+
+                    if (missingFields.length > 0) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_MISSING_CONTEXT_FIELD,
+                            `props.${propName}(...) is missing fields for '${contextTypeName}': ${missingFields.join(', ')}`,
+                            callExpr.token
+                        )
+                    }
+                }
+                this.checkPropCallsInUses(use.uses, componentProps, filePath, moduleName)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkPropCallsInUses((entry as any).body, componentProps, filePath, moduleName)
+            }
+        }
+    }
+
+    /**
+     * Resolves a context by name, searching the enclosing module first then all modules.
+     */
+    private resolveContextByName(contextName: string, enclosingModuleName: string): ContextNode | null {
+        const own = this.workspace.getContext(enclosingModuleName, contextName)
+        if (own) return own
+        for (const [, contextMap] of this.workspace.contexts) {
+            const ctx = contextMap.get(contextName)
+            if (ctx) return ctx
+        }
+        return null
     }
 
     private checkOwnershipDeclarations(): void {

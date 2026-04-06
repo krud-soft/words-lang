@@ -172,6 +172,14 @@ export enum DiagnosticCode {
      */
     A_UNKNOWN_ADAPTER_ARG = 'A011',
 
+    /**
+     * A `props.propName(...)` call constructs a context inline but omits one or
+     * more required fields declared on that context.
+     * e.g. `props.onSubmit( photoIds is ... )` when the context also requires
+     * `title`, `description`, `bodyArea`, and `symptoms`.
+     */
+    A_MISSING_CONTEXT_FIELD = 'A012',
+
     // ── Warnings ────────────────────────────────────────────────────────────────
 
     /**

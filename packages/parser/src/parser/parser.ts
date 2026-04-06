@@ -1094,6 +1094,7 @@ export class Parser {
     private parseArguments(): ArgumentNode[] {
         const args: ArgumentNode[] = []
         let lastPos = -1
+        this.skipTrivia() // allow arguments to start on the next line after '('
         while (this.checkArgumentStart()) {
             if (this.pos === lastPos) break
             lastPos = this.pos

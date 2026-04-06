@@ -267,6 +267,71 @@ export class WordsConnection {
             }
         }
 
+        // Try as a camelCase name — either a prop name or a handler argument name
+        if (/^[a-z]/.test(word)) {
+            // First: prop name (e.g. onBackToDashboard) → navigate to the prop declaration
+            const byPropName = this.resolveViewPropByName(word)
+            if (byPropName) return byPropName
+
+            // Second: argName (e.g. backToDashboard) → navigate to the argName token
+            const byArgName = this.resolveHandlerArg(word)
+            if (byArgName) return byArgName
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all components with props (views, providers, adapters, interfaces)
+     * for a prop whose `name` matches — navigates to the prop token.
+     */
+    private resolveViewPropByName(propName: string): Location | null {
+        return this.searchComponentProps((prop, filePath) =>
+            prop.name === propName ? tokenLocation(filePath, prop.token) : null
+        )
+    }
+
+    /**
+     * Searches all components with props for a prop whose `argName` matches —
+     * navigates to the argName token specifically.
+     */
+    private resolveHandlerArg(argName: string): Location | null {
+        return this.searchComponentProps((prop, filePath) =>
+            prop.argName === argName && prop.argNameToken
+                ? tokenLocation(filePath, prop.argNameToken!)
+                : null
+        )
+    }
+
+    /**
+     * Iterates props across views, providers, adapters, and interfaces.
+     * Calls `predicate` for each prop; returns the first non-null result.
+     */
+    private searchComponentProps(
+        predicate: (prop: { name: string; argName: string | null; argNameToken: { line: number; column: number; value: string } | null; token: { line: number; column: number; value: string } }, filePath: string) => Location | null
+    ): Location | null {
+        if (!this.workspace) return null
+
+        const componentMaps = [
+            this.workspace.views,
+            this.workspace.providers,
+            this.workspace.adapters,
+            this.workspace.interfaces,
+        ]
+
+        for (const moduleIndex of componentMaps) {
+            for (const [moduleName, componentMap] of moduleIndex) {
+                for (const [componentName, componentNode] of componentMap) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${componentName}`)
+                    if (!filePath) continue
+                    for (const prop of (componentNode as any).props as any[]) {
+                        const result = predicate(prop, filePath)
+                        if (result) return result
+                    }
+                }
+            }
+        }
+
         return null
     }
 }
@@ -295,6 +360,22 @@ function pathToUri(filePath: string): string {
     return normalized.match(/^[A-Za-z]:/)
         ? `file:///${normalized}`
         : `file://${normalized}`
+}
+
+/**
+ * Returns an LSP Location pointing to the exact position of a token.
+ * Token line and column are 1-based; LSP positions are 0-based.
+ */
+function tokenLocation(filePath: string, token: { line: number; column: number; value: string }): Location {
+    const line = token.line - 1
+    const char = token.column - 1
+    return {
+        uri: pathToUri(filePath),
+        range: Range.create(
+            Position.create(line, char),
+            Position.create(line, char + token.value.length)
+        ),
+    }
 }
 
 /**

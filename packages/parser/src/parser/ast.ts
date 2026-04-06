@@ -129,6 +129,7 @@ export interface PropNode extends BaseNode {
     optional: boolean
     defaultValue: LiteralNode | null
     argName: string | null
+    argNameToken: Token | null
 }
 
 // ── Literals ──────────────────────────────────────────────────────────────────

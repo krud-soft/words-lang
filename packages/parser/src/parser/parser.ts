@@ -1413,6 +1413,7 @@ export class Parser {
 
             let type: TypeNode | null = null
             let argName: string | null = null
+            let argNameToken: import('../lexer/token').Token | null = null
             let defaultValue: LiteralNode | null = null
 
             if (this.check(TokenType.LParen)) {
@@ -1423,6 +1424,7 @@ export class Parser {
                 optional = optional || ('optional' in type && (type as { optional: boolean }).optional)
             } else if (this.check(TokenType.CamelIdent)) {
                 // name argName(Type) — interaction prop with argument variable
+                argNameToken = this.current()
                 argName = this.advance().value
                 this.skipTrivia()
                 if (this.check(TokenType.LParen)) {
@@ -1450,7 +1452,7 @@ export class Parser {
                 defaultValue = this.parseLiteralValue()
             }
 
-            props.push({ kind: 'Prop', token: tok, name, type, optional, defaultValue, argName })
+            props.push({ kind: 'Prop', token: tok, name, type, optional, defaultValue, argName, argNameToken })
 
             this.skipTrivia()
             if (this.check(TokenType.Comma)) this.advance()
@@ -1562,7 +1564,7 @@ export class Parser {
                 paramType = this.parseType()
                 this.expect(TokenType.RParen)
             }
-            params.push({ kind: 'Prop', token: paramTok, name: paramName, type: paramType, optional: false, defaultValue: null, argName: null })
+            params.push({ kind: 'Prop', token: paramTok, name: paramName, type: paramType, optional: false, defaultValue: null, argName: null, argNameToken: null })
             this.skipTrivia()
         }
 

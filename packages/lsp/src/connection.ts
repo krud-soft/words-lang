@@ -290,19 +290,23 @@ export class WordsConnection {
             }
         }
 
-        // Try as a camelCase name — prop name, handler arg, method name, or method parameter
+        // Try as a camelCase name. Resolution order matters — more specific wins:
+        //   1. Method names on module inline interfaces (e.g. `switch`, `subscribeRoute`)
+        //   2. Method parameters on module inline interfaces (e.g. `path` in `switch path(string)`)
+        //   3. Handler argument names on component props (e.g. `backToDashboard`)
+        //   4. Prop names on component props (e.g. `onSubmit`)
         if (/^[a-z]/.test(word)) {
-            const byPropName = this.resolveViewPropByName(word)
-            if (byPropName) return byPropName
-
-            const byArgName = this.resolveHandlerArg(word)
-            if (byArgName) return byArgName
-
             const byMethodName = this.resolveModuleMethodByName(word)
             if (byMethodName) return byMethodName
 
             const byMethodParam = this.resolveModuleMethodParam(word)
             if (byMethodParam) return byMethodParam
+
+            const byArgName = this.resolveHandlerArg(word)
+            if (byArgName) return byArgName
+
+            const byPropName = this.resolveViewPropByName(word)
+            if (byPropName) return byPropName
         }
 
         return null

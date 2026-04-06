@@ -45,6 +45,9 @@
             "include": "#pascal-case-name"
         },
         {
+            "include": "#method-name"
+        },
+        {
             "include": "#camel-case-name"
         },
         {
@@ -388,8 +391,13 @@
             "match": "\\b[A-Z][A-Za-z0-9]+\\b",
             "name": "entity.name.type.wds"
         },
+        "method-name": {
+            "comment": "camelCase method/handler names in declaration position — followed by '(' or a param or 'returns('",
+            "match": "\\b([a-z][A-Za-z0-9]*)\\b(?=\\s*\\(|\\s+[a-z][A-Za-z0-9]*\\s*\\(|\\s+returns\\s*\\()",
+            "name": "entity.name.function.wds"
+        },
         "camel-case-name": {
-            "comment": "camelCase identifiers — prop names, method names, variable names",
+            "comment": "camelCase identifiers — prop names, argument names, variable names",
             "match": "\\b[a-z][A-Za-z0-9]+\\b",
             "name": "variable.other.wds"
         },

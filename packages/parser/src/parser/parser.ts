@@ -773,7 +773,9 @@ export class Parser {
     private parseInterface(): InterfaceNode {
         const tok = this.expect(TokenType.Interface)!
         this.skipTrivia()
-        const name = this.expectIdent('interface name')
+        // Name is optional — a module-level anonymous interface (`interface ( ... )`)
+        // exposes methods directly without a named handler shape.
+        const name = this.check(TokenType.LParen) ? '' : this.expectIdent('interface name')
         this.skipTrivia()
         const description = this.parseOptionalString()
         this.skipTrivia()

@@ -224,6 +224,7 @@ export interface MethodNode extends BaseNode {
 export interface SimpleReturnsNode extends BaseNode {
     kind: 'SimpleReturns'
     contexts: string[]
+    contextTokens: Token[]
 }
 
 /**

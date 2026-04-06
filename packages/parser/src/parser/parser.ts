@@ -864,18 +864,21 @@ export class Parser {
 
         // Simple form — comma-separated list of context names
         const contexts: string[] = []
+        const contextTokens: import('../lexer/token').Token[] = []
         if (this.check(TokenType.PascalIdent)) {
+            contextTokens.push(this.current())
             contexts.push(this.advance().value)
             while (this.check(TokenType.Comma)) {
                 this.advance()
                 this.skipTrivia()
                 if (this.check(TokenType.PascalIdent)) {
+                    contextTokens.push(this.current())
                     contexts.push(this.advance().value)
                 }
             }
         }
 
-        return { kind: 'SimpleReturns', token: tok, contexts } as SimpleReturnsNode
+        return { kind: 'SimpleReturns', token: tok, contexts, contextTokens } as SimpleReturnsNode
     }
 
     // ── Uses block ─────────────────────────────────────────────────────────────

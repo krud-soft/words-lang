@@ -174,15 +174,13 @@ export class Analyser {
                 const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
                 if (!filePath) continue
 
-                const returnedContexts = this.extractReturnedContexts(stateNode)
-
-                for (const contextName of returnedContexts) {
-                    if (!coveredReturns.has(`${stateName}::${contextName}`)) {
+                for (const { name, token } of this.extractReturnedContextsWithTokens(stateNode)) {
+                    if (!coveredReturns.has(`${stateName}::${name}`)) {
                         this.report(
                             filePath,
                             DiagnosticCode.A_UNHANDLED_RETURN,
-                            `Context '${contextName}' is listed in state '${stateName}' returns but has no corresponding when rule in module '${moduleName}'`,
-                            stateNode.token
+                            `State '${stateName}' returns context '${name}' without a corresponding when rule in module '${moduleName}'`,
+                            token
                         )
                     }
                 }
@@ -425,14 +423,30 @@ export class Analyser {
      * handling both simple and expanded forms.
      */
     private extractReturnedContexts(stateNode: StateNode): string[] {
+        return this.extractReturnedContextsWithTokens(stateNode).map(e => e.name)
+    }
+
+    /**
+     * Extracts all context names and their source tokens from a state's returns clause.
+     * For simple returns, uses the per-context token stored at parse time.
+     * For expanded returns, uses the ExpandedReturnNode's own token.
+     */
+    private extractReturnedContextsWithTokens(stateNode: StateNode): Array<{ name: string; token: { line: number; column: number; value: string } }> {
         if (!stateNode.returns) return []
 
         if (stateNode.returns.kind === 'SimpleReturns') {
-            return (stateNode.returns as SimpleReturnsNode).contexts
+            const node = stateNode.returns as SimpleReturnsNode
+            return node.contexts.map((name, i) => ({
+                name,
+                token: node.contextTokens[i] ?? node.token,
+            }))
         }
 
         if (stateNode.returns.kind === 'ExpandedReturns') {
-            return (stateNode.returns as ExpandedReturnsNode).entries.map(e => e.contextName)
+            return (stateNode.returns as ExpandedReturnsNode).entries.map(e => ({
+                name: e.contextName,
+                token: e.token,
+            }))
         }
 
         return []

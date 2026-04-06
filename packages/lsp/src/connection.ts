@@ -148,6 +148,13 @@ export class WordsConnection {
             if (states.length > 0) return states
         }
 
+        // Method name in a module inline interface → show implementors (named interface)
+        // or callers (anonymous interface)
+        if (/^[a-z]/.test(word)) {
+            const refs = this.resolveInterfaceMethodReferences(word)
+            if (refs && refs.length > 0) return refs
+        }
+
         return this.resolveDefinition(word)
     }
 
@@ -478,6 +485,68 @@ export class WordsConnection {
             return false
         }
         return checkEntries(stateNode.uses)
+    }
+
+    /**
+     * Given a method name, searches all module inline interfaces to determine
+     * whether it belongs to a named (handler) interface or an anonymous one,
+     * then returns the appropriate references:
+     *
+     *   - Named interface (e.g. `RouteSwitchHandler.switch`): returns all modules
+     *     that have an `implements` block referencing that handler interface.
+     *
+     *   - Anonymous interface method (e.g. `subscribeRoute`): returns all modules
+     *     that have a subscription call whose callee ends with that method name.
+     *
+     * Returns null if the method name is not found in any inline interface.
+     */
+    private resolveInterfaceMethodReferences(methodName: string): Location[] | null {
+        if (!this.workspace) return null
+
+        for (const [ownerModuleName, moduleNode] of this.workspace.modules) {
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    if (method.name !== methodName) continue
+
+                    const ownerPath = this.workspace.modulePaths.get(ownerModuleName)
+                    if (!ownerPath) return null
+
+                    if (iface.name) {
+                        // Named handler interface — find all modules that implement it
+                        const qualifiedName = `${ownerModuleName}.${iface.name}`
+                        const locations: Location[] = []
+                        for (const [moduleName, mod] of this.workspace.modules) {
+                            for (const impl of mod.implements) {
+                                const implName = impl.interfaceName.parts.join('.')
+                                if (implName === qualifiedName) {
+                                    const filePath = this.workspace.modulePaths.get(moduleName)
+                                    if (filePath) locations.push(tokenLocation(filePath, impl.token))
+                                }
+                            }
+                        }
+                        return locations
+                    } else {
+                        // Anonymous interface — find all modules with a matching subscription call
+                        const locations: Location[] = []
+                        for (const [moduleName, mod] of this.workspace.modules) {
+                            for (const sub of mod.subscriptions) {
+                                const callee = sub.callee
+                                const parts: string[] = callee.kind === 'QualifiedName'
+                                    ? callee.parts
+                                    : (callee as any).path ?? []
+                                if (parts[parts.length - 1] === methodName) {
+                                    const filePath = this.workspace.modulePaths.get(moduleName)
+                                    if (filePath) locations.push(tokenLocation(filePath, sub.token))
+                                }
+                            }
+                        }
+                        return locations
+                    }
+                }
+            }
+        }
+
+        return null
     }
 }
 

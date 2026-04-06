@@ -281,8 +281,7 @@
                     "comment": "is assignment / comparison",
                     "match": "\\bis\\b",
                     "name": "keyword.operator.assignment.wds"
-                },
-
+                }
             ]
         },
         "system-access": {

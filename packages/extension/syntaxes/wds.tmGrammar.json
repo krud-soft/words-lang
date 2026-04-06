@@ -282,11 +282,7 @@
                     "match": "\\bis\\b",
                     "name": "keyword.operator.assignment.wds"
                 },
-                {
-                    "comment": "onLoad callback keyword",
-                    "match": "\\b(onLoad)\\b",
-                    "name": "keyword.other.onload.wds"
-                }
+
             ]
         },
         "system-access": {

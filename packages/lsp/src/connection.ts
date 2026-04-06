@@ -258,6 +258,11 @@ export class WordsConnection {
     private resolveDefinition(word: string): Location | null {
         if (!this.workspace) return null
 
+        // Bare `system` keyword → navigate to the system definition file
+        if (word === 'system' && this.workspace.systemFilePath) {
+            return fileLocation(this.workspace.systemFilePath)
+        }
+
         const dotIndex = word.indexOf('.')
         if (dotIndex !== -1) {
             const left = word.slice(0, dotIndex)
@@ -268,6 +273,10 @@ export class WordsConnection {
                 const modulePath = this.workspace.modulePaths.get(right)
                 if (modulePath) return fileLocation(modulePath)
             }
+
+            // AdapterName.methodName → navigate to the method on the adapter
+            const adapterMethodLoc = this.resolveAdapterMethod(left, right)
+            if (adapterMethodLoc) return adapterMethodLoc
 
             // ModuleName.methodName → search module inline interfaces for that method
             const methodLoc = this.resolveModuleMethod(left, right)
@@ -340,6 +349,24 @@ export class WordsConnection {
      * Navigates to the method's token.
      * Used for `ModuleName.methodName` (e.g. `RoutingModule.subscribeRoute`).
      */
+    private resolveAdapterMethod(adapterName: string, methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, adapterMap] of this.workspace.adapters) {
+            const adapter = adapterMap.get(adapterName)
+            if (!adapter) continue
+
+            for (const method of adapter.methods) {
+                if (method.name === methodName) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${adapterName}`)
+                    if (filePath) return tokenLocation(filePath, method.token)
+                }
+            }
+        }
+
+        return null
+    }
+
     private resolveModuleMethod(moduleName: string, methodName: string): Location | null {
         if (!this.workspace) return null
 

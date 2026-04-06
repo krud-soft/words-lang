@@ -334,10 +334,11 @@ export class Analyser {
                         !validReturns.has(prop.type.name)
                     ) {
                         // Arg name matches but the prop's type is not a declared return context
+                        const expected = [...validReturns].join(', ') || 'none'
                         this.report(
                             filePath,
                             DiagnosticCode.A_INVALID_STATE_RETURN,
-                            `Prop '${arg.name}' argument type '${prop.type.name}' does not match any context in the enclosing state's returns clause`,
+                            `Arg '${prop.argName}' of type '${prop.type.name}' passed to prop '${arg.name}' does not match any context in the enclosing state's returns clause (returns: ${expected})`,
                             returnStmt.token
                         )
                     }

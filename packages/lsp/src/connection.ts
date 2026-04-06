@@ -253,10 +253,21 @@ export class WordsConnection {
 
         const dotIndex = word.indexOf('.')
         if (dotIndex !== -1) {
-            // Qualified name: Module.Construct
-            const moduleName = word.slice(0, dotIndex)
-            const constructName = word.slice(dotIndex + 1)
-            const key = `${moduleName}/${constructName}`
+            const left = word.slice(0, dotIndex)
+            const right = word.slice(dotIndex + 1)
+
+            // system.ModuleName → navigate to the module definition
+            if (left === 'system') {
+                const modulePath = this.workspace.modulePaths.get(right)
+                if (modulePath) return fileLocation(modulePath)
+            }
+
+            // ModuleName.methodName → search module inline interfaces for that method
+            const methodLoc = this.resolveModuleMethod(left, right)
+            if (methodLoc) return methodLoc
+
+            // ModuleName.Construct → construct in that module
+            const key = `${left}/${right}`
             const filePath = this.workspace.constructPaths.get(key)
             if (filePath) return fileLocation(filePath)
         }
@@ -272,15 +283,93 @@ export class WordsConnection {
             }
         }
 
-        // Try as a camelCase name — either a prop name or a handler argument name
+        // Try as a camelCase name — prop name, handler arg, method name, or method parameter
         if (/^[a-z]/.test(word)) {
-            // First: prop name (e.g. onBackToDashboard) → navigate to the prop declaration
             const byPropName = this.resolveViewPropByName(word)
             if (byPropName) return byPropName
 
-            // Second: argName (e.g. backToDashboard) → navigate to the argName token
             const byArgName = this.resolveHandlerArg(word)
             if (byArgName) return byArgName
+
+            const byMethodName = this.resolveModuleMethodByName(word)
+            if (byMethodName) return byMethodName
+
+            const byMethodParam = this.resolveModuleMethodParam(word)
+            if (byMethodParam) return byMethodParam
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all module inline interfaces for a method by name.
+     * Used when the cursor is on a bare method name like `switch`.
+     */
+    private resolveModuleMethodByName(methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, moduleNode] of this.workspace.modules) {
+            const modulePath = this.workspace.modulePaths.get(moduleName)
+            if (!modulePath) continue
+
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    if (method.name === methodName) {
+                        return tokenLocation(modulePath, method.token)
+                    }
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Searches a module's inline interfaces for a method named `methodName`.
+     * Navigates to the method's token.
+     * Used for `ModuleName.methodName` (e.g. `RoutingModule.subscribeRoute`).
+     */
+    private resolveModuleMethod(moduleName: string, methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        const moduleNode = this.workspace.modules.get(moduleName)
+        if (!moduleNode) return null
+
+        const modulePath = this.workspace.modulePaths.get(moduleName)
+        if (!modulePath) return null
+
+        for (const iface of moduleNode.inlineInterfaces) {
+            for (const method of iface.methods) {
+                if (method.name === methodName) {
+                    return tokenLocation(modulePath, method.token)
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all module inline interface methods for a parameter named `paramName`.
+     * Navigates to the param's token.
+     * Used when the cursor is on e.g. `path` in `subscribeRoute path is "..."`.
+     */
+    private resolveModuleMethodParam(paramName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, moduleNode] of this.workspace.modules) {
+            const modulePath = this.workspace.modulePaths.get(moduleName)
+            if (!modulePath) continue
+
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    for (const param of method.params) {
+                        if (param.name === paramName) {
+                            return tokenLocation(modulePath, param.token)
+                        }
+                    }
+                }
+            }
         }
 
         return null

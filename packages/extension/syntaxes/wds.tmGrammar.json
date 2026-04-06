@@ -280,11 +280,6 @@
                     "name": "keyword.operator.assignment.wds"
                 },
                 {
-                    "comment": "switch handler keyword",
-                    "match": "\\b(switch)\\b",
-                    "name": "keyword.control.switch.wds"
-                },
-                {
                     "comment": "onLoad callback keyword",
                     "match": "\\b(onLoad)\\b",
                     "name": "keyword.other.onload.wds"

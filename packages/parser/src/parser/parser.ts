@@ -1300,6 +1300,7 @@ export class Parser {
         // Call expression: path(args...)
         // Supports both keyword-style args (`name is value`) and a single positional
         // PascalIdent type reference (e.g. `system.getContext(SystemUser)`).
+        // After the closing ')' may come further dot-segments: `.fullName`, `.avatarUrl`, etc.
         if (this.check(TokenType.LParen)) {
             this.advance() // consume '('
             const args = this.parseArguments()
@@ -1310,6 +1311,19 @@ export class Parser {
                 args.push({ kind: 'Argument', token: valTok, name: '', value })
             }
             this.expect(TokenType.RParen)
+            // Consume any trailing property access: system.getContext(SystemUser).fullName
+            while (this.check(TokenType.Dot)) {
+                this.advance()
+                if (
+                    this.check(TokenType.CamelIdent) ||
+                    this.check(TokenType.PascalIdent) ||
+                    this.check(TokenType.Context)
+                ) {
+                    path.push(this.advance().value)
+                } else {
+                    break
+                }
+            }
             const callee: AccessExpressionNode = { kind: 'AccessExpression', token: tok, path }
             return { kind: 'CallExpression', token: tok, callee, args } as CallExpressionNode
         }

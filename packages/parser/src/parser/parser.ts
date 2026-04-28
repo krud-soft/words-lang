@@ -44,6 +44,8 @@ import {
     InlineContextNode,
     ImplementsHandlerNode,
     ImplementsBranchNode,
+    ImplementsCallbackNode,
+    ImplementsEnterActionNode,
     PropNode,
     MethodNode,
     TypeNode,
@@ -300,7 +302,7 @@ export class Parser {
 
         const processes: ProcessNode[] = []
         let startState: string | null = null
-        const implementations: ImplementsHandlerNode[] = []
+        const implementations: (ImplementsHandlerNode | ImplementsCallbackNode)[] = []
         const subscriptions: CallExpressionNode[] = []
         const inlineInterfaces: InterfaceNode[] = []
 
@@ -422,7 +424,9 @@ export class Parser {
     // ── Implements ─────────────────────────────────────────────────────────────
 
     /**
-     * Parses:
+     * Dispatches to either the switch-handler form or the callback form:
+     *
+     * Switch form (if-branch dispatch):
      *   implements Module.HandlerInterface (
      *     methodName param(Type) (
      *       if param is "/path"
@@ -430,10 +434,16 @@ export class Parser {
      *     )
      *   )
      *
-     * The method name (e.g. `switch`) is a plain camelCase identifier chosen
-     * by the designer on the handler interface — it is not a reserved keyword.
+     * Callback form (direct enter action):
+     *   implements Module.ListenerInterface (
+     *     methodName is (
+     *       enter State context is ContextType ( args )
+     *     )
+     *   )
+     *
+     * The form is detected by checking whether `is` follows the method name.
      */
-    private parseImplements(): ImplementsHandlerNode {
+    private parseImplements(): ImplementsHandlerNode | ImplementsCallbackNode {
         const tok = this.expect(TokenType.Implements)!
         this.skipTrivia()
         const interfaceName = this.parseQualifiedName()
@@ -441,12 +451,14 @@ export class Parser {
         this.expect(TokenType.LParen)
         this.skipTrivia()
 
-        // handler method name param(Type) ( ... )
-        // The method name (e.g. `switch`) is a plain camelCase name chosen by the
-        // designer on the handler interface — it is not a reserved keyword.
-        // We consume the method name then the parameter name and its type.
-        this.expectIdent('handler method name') // e.g. 'switch' — consumed but not stored
+        const methodName = this.expectIdent('method name')
         this.skipTrivia()
+
+        if (this.check(TokenType.Is)) {
+            return this.parseImplementsCallbackBody(tok, interfaceName, methodName)
+        }
+
+        // Switch form: methodName paramName(Type) ( if ... )
         const switchParam = this.expectIdent('handler method parameter name')
         this.skipTrivia()
         this.expect(TokenType.LParen)
@@ -474,7 +486,68 @@ export class Parser {
     }
 
     /**
-     * Parses one branch inside an implements handler body:
+     * Parses the callback form of an implements body:
+     *   methodName is (
+     *     enter State context is ContextType ( args )
+     *   )
+     */
+    private parseImplementsCallbackBody(
+        tok: Token,
+        interfaceName: QualifiedName,
+        methodName: string
+    ): ImplementsCallbackNode {
+        this.advance() // consume 'is'
+        this.skipTrivia()
+        this.expect(TokenType.LParen) // open method body
+
+        const enterActions: ImplementsEnterActionNode[] = []
+
+        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
+            this.skipTrivia()
+            if (this.check(TokenType.Enter)) {
+                enterActions.push(this.parseImplementsEnterAction())
+            } else if (!this.check(TokenType.RParen)) {
+                this.advance()
+            }
+        }
+
+        this.expect(TokenType.RParen) // close method body
+        this.skipTrivia()
+        this.expect(TokenType.RParen) // close implements body
+
+        return { kind: 'ImplementsCallback', token: tok, interfaceName, methodName, enterActions }
+    }
+
+    /**
+     * Parses a single enter action inside an implements callback body:
+     *   enter StateName context is ContextType ( field is value, ... )
+     */
+    private parseImplementsEnterAction(): ImplementsEnterActionNode {
+        const tok = this.expect(TokenType.Enter)!
+        this.skipTrivia()
+        const targetState = this.expectIdent('target state name')
+        this.skipTrivia()
+
+        let contextType: string | null = null
+        if (this.check(TokenType.Context)) {
+            this.advance() // consume 'context'
+            this.skipTrivia()
+            this.expect(TokenType.Is)
+            this.skipTrivia()
+            contextType = this.expectIdent('context type name')
+            this.skipTrivia()
+        }
+
+        let inlineContext: InlineContextNode | null = null
+        if (this.check(TokenType.LParen)) {
+            inlineContext = this.parseInlineContext()
+        }
+
+        return { kind: 'ImplementsEnterAction', token: tok, targetState, contextType, inlineContext }
+    }
+
+    /**
+     * Parses one branch inside an implements switch handler body:
      *   if param is "/path"
      *     enter State "narrative"
      */
@@ -1239,16 +1312,32 @@ export class Parser {
             this.expect(TokenType.Dot)
             this.skipTrivia()
 
-            // state.return(contextName)
+            // state.return ContextType ( args )  — new form
+            // state.return(contextName)           — old form
             if (this.check(TokenType.CamelIdent) && this.current().value === 'return') {
                 this.advance() // consume 'return'
+                this.skipTrivia()
+
+                // New form: state.return ContextType [( inlineArgs )]
+                if (this.check(TokenType.PascalIdent)) {
+                    const contextNameToken = this.current()
+                    const contextName = this.advance().value
+                    this.skipTrivia()
+                    let inlineContext: InlineContextNode | null = null
+                    if (this.check(TokenType.LParen)) {
+                        inlineContext = this.parseInlineContext()
+                    }
+                    return { kind: 'StateReturnStatement', token: tok, contextName, contextNameToken, inlineContext } as StateReturnStatementNode
+                }
+
+                // Old form: state.return(contextName)
                 this.expect(TokenType.LParen)
                 this.skipTrivia()
                 const contextNameToken = this.current()
                 const contextName = this.expectIdent('context name in state.return()')
                 this.skipTrivia()
                 this.expect(TokenType.RParen)
-                return { kind: 'StateReturnStatement', token: tok, contextName, contextNameToken } as StateReturnStatementNode
+                return { kind: 'StateReturnStatement', token: tok, contextName, contextNameToken, inlineContext: null } as StateReturnStatementNode
             }
 
             // state.fieldName is value — assignment

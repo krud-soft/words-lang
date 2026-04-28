@@ -219,10 +219,16 @@ export class Analyser {
                 }
             }
 
-            // Also collect all states referenced in implements branches
+            // Also collect all states referenced in implements blocks
             for (const impl of moduleNode.implements) {
-                for (const branch of impl.branches) {
-                    reachable.add(branch.targetState)
+                if (impl.kind === 'ImplementsHandler') {
+                    for (const branch of impl.branches) {
+                        reachable.add(branch.targetState)
+                    }
+                } else {
+                    for (const action of impl.enterActions) {
+                        reachable.add(action.targetState)
+                    }
                 }
             }
 
@@ -323,8 +329,12 @@ export class Analyser {
                 const prop = viewProps?.find(p => p.name === arg.name) ?? null
 
                 const returnToken = returnStmt.contextNameToken ?? returnStmt.token
-                if (prop?.argName) {
-                    // Prop declares a named argument — state.return(x) must use that name
+                // PascalCase contextName or inline construction means a direct context type
+                // reference — validate against validReturns. camelCase inside state.return(x)
+                // is the old arg-binding form and must match the prop's argName.
+                const isDirectContextRef = /^[A-Z]/.test(returnStmt.contextName) || returnStmt.inlineContext !== null
+                if (prop?.argName && !isDirectContextRef) {
+                    // Old form: state.return(argName) — must match the prop's declared arg
                     if (returnStmt.contextName !== prop.argName) {
                         this.report(
                             filePath,
@@ -334,10 +344,9 @@ export class Analyser {
                         )
                     } else if (
                         prop.type?.kind === 'NamedType' &&
-                        prop.type.name !== '?' &&      // '?' is the sentinel for a parse-error type — already reported
+                        prop.type.name !== '?' &&
                         !validReturns.has(prop.type.name)
                     ) {
-                        // Arg name matches but the prop's type is not a declared return context
                         const expected = [...validReturns].join(', ') || 'none'
                         this.report(
                             filePath,
@@ -347,13 +356,8 @@ export class Analyser {
                         )
                     }
                 } else {
-                    // Prop has no named argument — state.return(x) must be a direct context name.
-                    //
-                    // If the view was resolved and the prop was found, a camelCase x is a clear
-                    // signal that the user is treating it as an argument reference (e.g. wrote
-                    // state.return(backToDashboard) when onBackToDashboard has no argument).
-                    // Report A010 in that case so the error points at the handler definition.
-                    // A PascalCase x is a context name attempt — fall through to A008.
+                    // Direct context type reference (PascalCase or inline construction),
+                    // or prop has no argName — must be in the state's declared returns.
                     if (!validReturns.has(returnStmt.contextName)) {
                         const looksLikeArgRef = prop !== null && /^[a-z]/.test(returnStmt.contextName)
                         if (looksLikeArgRef) {

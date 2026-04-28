@@ -403,6 +403,7 @@ export interface StateReturnStatementNode extends BaseNode {
     contextName: string
     /** The token of the argument inside `state.return(x)` — used for precise diagnostics. */
     contextNameToken: Token
+    inlineContext: InlineContextNode | null
 }
 
 /**
@@ -591,6 +592,45 @@ export interface ImplementsHandlerNode extends BaseNode {
     branches: ImplementsBranchNode[]
 }
 
+/**
+ * A single `enter` action inside an implements callback body.
+ * Maps a method invocation to a state transition with an optional explicit
+ * context type and inline context construction.
+ *
+ * Example:
+ *   enter Unauthenticated context is AuthError (
+ *     code is filter.doctorId,
+ *     reason is filter.sortOrder
+ *   )
+ */
+export interface ImplementsEnterActionNode extends BaseNode {
+    kind: 'ImplementsEnterAction'
+    targetState: string
+    contextType: string | null
+    inlineContext: InlineContextNode | null
+}
+
+/**
+ * A callback-style `implements` block where a single interface method is
+ * implemented directly as one or more enter actions (no if-branch dispatch).
+ *
+ * Example:
+ *   implements RecordsModule.RecordsLoadListener (
+ *     onLoaded is (
+ *       enter Unauthenticated context is AuthError (
+ *         code is filter.doctorId,
+ *         reason is filter.sortOrder
+ *       )
+ *     )
+ *   )
+ */
+export interface ImplementsCallbackNode extends BaseNode {
+    kind: 'ImplementsCallback'
+    interfaceName: QualifiedName
+    methodName: string
+    enterActions: ImplementsEnterActionNode[]
+}
+
 // ── Top-level constructs ──────────────────────────────────────────────────────
 
 /**
@@ -627,7 +667,7 @@ export interface ModuleNode extends BaseNode {
     description: string | null
     processes: ProcessNode[]
     startState: string | null
-    implements: ImplementsHandlerNode[]
+    implements: (ImplementsHandlerNode | ImplementsCallbackNode)[]
     subscriptions: CallExpressionNode[]
     inlineInterfaces: InterfaceNode[]
 }

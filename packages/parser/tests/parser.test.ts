@@ -132,12 +132,49 @@ module CatalogModule (
         const mod = document.nodes[0] as ModuleNode
         expect(mod.implements).toHaveLength(1)
 
-        const impl = mod.implements[0]
+        const impl = mod.implements[0] as any
+        expect(impl.kind).toBe('ImplementsHandler')
         expect(impl.interfaceName.parts).toEqual(['RoutingModule', 'RouteSwitchHandler'])
         expect(impl.switchParam).toBe('path')
         expect(impl.branches).toHaveLength(1)
         expect(impl.branches[0].targetState).toBe('OrderDiplaying')
         expect(impl.branches[0].narrative).toBe('The /orders path activates the order display')
+    })
+
+    it('parses an implements callback block with inline context construction', () => {
+        const src = `
+module AuthModule (
+    implements RecordsModule.RecordsLoadListener (
+        onLoaded is (
+            enter Unauthenticated context is AuthError (
+                code is filter.doctorId,
+                reason is filter.sortOrder
+            )
+        )
+    )
+    start Unauthenticated
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const mod = document.nodes[0] as ModuleNode
+        expect(mod.implements).toHaveLength(1)
+
+        const impl = mod.implements[0] as any
+        expect(impl.kind).toBe('ImplementsCallback')
+        expect(impl.interfaceName.parts).toEqual(['RecordsModule', 'RecordsLoadListener'])
+        expect(impl.methodName).toBe('onLoaded')
+        expect(impl.enterActions).toHaveLength(1)
+
+        const action = impl.enterActions[0]
+        expect(action.targetState).toBe('Unauthenticated')
+        expect(action.contextType).toBe('AuthError')
+        expect(action.inlineContext).not.toBeNull()
+        expect(action.inlineContext.args).toHaveLength(2)
+        expect(action.inlineContext.args[0].name).toBe('code')
+        expect(action.inlineContext.args[1].name).toBe('reason')
     })
 
 })
@@ -304,6 +341,40 @@ screen OrderSummaryScreen "Shows the order summary screen" (
         expect(onConfirmArg.value.kind).toBe('BlockExpression')
         expect(onConfirmArg.value.statements[0].kind).toBe('StateReturnStatement')
         expect(onConfirmArg.value.statements[0].contextName).toBe('confirmDetails')
+    })
+
+    it('parses state.return with inline context construction', () => {
+        const src = `
+module AuthModule
+screen PortalHomeScreen (
+    uses (
+        view PortalNavView (
+            patientName is state.context.fullName,
+            onLogout is (
+                state.return LogoutRequest (
+                    reason is "User decided to deauthenticate"
+                )
+            )
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const navView = screen.uses[0] as any
+        const onLogoutArg = navView.args.find((a: any) => a.name === 'onLogout')
+        expect(onLogoutArg).toBeDefined()
+        expect(onLogoutArg.value.kind).toBe('BlockExpression')
+
+        const stmt = onLogoutArg.value.statements[0]
+        expect(stmt.kind).toBe('StateReturnStatement')
+        expect(stmt.contextName).toBe('LogoutRequest')
+        expect(stmt.inlineContext).not.toBeNull()
+        expect(stmt.inlineContext.args).toHaveLength(1)
+        expect(stmt.inlineContext.args[0].name).toBe('reason')
     })
 
     it('parses conditional rendering in a screen', () => {

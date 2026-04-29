@@ -180,6 +180,27 @@ export enum DiagnosticCode {
      */
     A_MISSING_CONTEXT_FIELD = 'A012',
 
+    /** An interface includes another interface that cannot be resolved. */
+    A_UNDEFINED_INCLUDED_INTERFACE = 'A013',
+
+    /** An interface includes or is included by a non-data interface. */
+    A_INVALID_INTERFACE_INCLUDE = 'A014',
+
+    /** Interface includes declarations form a cycle. */
+    A_CYCLIC_INTERFACE_INCLUDE = 'A015',
+
+    /** Included interfaces declare the same prop with incompatible types. */
+    A_DUPLICATE_INTERFACE_PROP = 'A016',
+
+    /** A component reads a runtime value that is not available in its layer. */
+    A_INVALID_RUNTIME_ACCESS = 'A017',
+
+    /** A state directly uses a view instead of using a screen as the UI root. */
+    A_INVALID_STATE_USE = 'A018',
+
+    /** A value is passed to a prop whose declared interface type it does not satisfy. */
+    A_INVALID_TYPE_ASSIGNMENT = 'A019',
+
     // ── Warnings ────────────────────────────────────────────────────────────────
 
     /**

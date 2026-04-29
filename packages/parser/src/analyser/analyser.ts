@@ -322,14 +322,12 @@ export class Analyser {
                 const filePath = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
                 if (!filePath) continue
 
-                // Find the state that uses this screen
-                const enclosingState = this.findStateUsingScreen(moduleName, screenName)
-                if (!enclosingState) continue
-
-                const validReturns = new Set(this.extractReturnedContexts(enclosingState))
-
-                // Walk the screen's uses tree and check every state.return()
-                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName)
+                // A screen can be mounted by more than one state. Validate its
+                // state.return() calls against each mounting state's returns.
+                for (const enclosingState of this.findStatesUsingScreen(moduleName, screenName)) {
+                    const validReturns = new Set(this.extractReturnedContexts(enclosingState))
+                    this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName, enclosingState)
+                }
             }
         }
     }
@@ -341,16 +339,17 @@ export class Analyser {
         uses: UseEntryNode[],
         validReturns: Set<string>,
         filePath: string,
-        enclosingModuleName: string
+        enclosingModuleName: string,
+        enclosingState: StateNode
     ): void {
         for (const entry of uses) {
             if (entry.kind === 'ComponentUse') {
-                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName)
-                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName, enclosingState)
+                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName, enclosingState)
             } else if (entry.kind === 'ConditionalBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName, enclosingState)
             } else if (entry.kind === 'IterationBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName, enclosingState)
             }
         }
     }
@@ -374,7 +373,8 @@ export class Analyser {
         componentUse: ComponentUseNode,
         validReturns: Set<string>,
         filePath: string,
-        enclosingModuleName: string
+        enclosingModuleName: string,
+        enclosingState: StateNode
     ): void {
         const viewProps = this.resolveViewProps(componentUse.name, enclosingModuleName)
 
@@ -407,11 +407,14 @@ export class Analyser {
                         prop.type.name !== '?' &&
                         !validReturns.has(prop.type.name)
                     ) {
-                        const expected = [...validReturns].join(', ') || 'none'
                         this.report(
                             filePath,
                             DiagnosticCode.A_INVALID_STATE_RETURN,
-                            `Arg '${prop.argName}' of type '${prop.type.name}' passed to prop '${arg.name}' does not match any context in the enclosing state's returns clause (returns: ${expected})`,
+                            this.describeInvalidReturnForState(
+                                enclosingState,
+                                prop.type.name,
+                                `Arg '${prop.argName}' passed to prop '${arg.name}' produces '${prop.type.name}'`
+                            ),
                             returnToken
                         )
                     }
@@ -431,7 +434,11 @@ export class Analyser {
                             this.report(
                                 filePath,
                                 DiagnosticCode.A_INVALID_STATE_RETURN,
-                                `state.return('${returnStmt.contextName}') does not match any context in the enclosing state's returns clause`,
+                                this.describeInvalidReturnForState(
+                                    enclosingState,
+                                    returnStmt.contextName,
+                                    `state.return('${returnStmt.contextName}')`
+                                ),
                                 returnToken
                             )
                         }
@@ -1006,12 +1013,13 @@ export class Analyser {
     }
 
     /**
-     * Finds the StateNode in `moduleName` that uses the given screen.
-     * Returns null if no state in the module uses this screen.
+     * Finds every StateNode in `moduleName` that uses the given screen.
      */
-    private findStateUsingScreen(moduleName: string, screenName: string): StateNode | null {
+    private findStatesUsingScreen(moduleName: string, screenName: string): StateNode[] {
         const stateMap = this.workspace.states.get(moduleName)
-        if (!stateMap) return null
+        if (!stateMap) return []
+
+        const states: StateNode[] = []
 
         for (const [, stateNode] of stateMap) {
             for (const entry of stateNode.uses) {
@@ -1020,14 +1028,20 @@ export class Analyser {
                     entry.componentKind === 'screen' &&
                     (entry.name.parts.length === 1
                         ? entry.name.parts[0] === screenName
-                        : entry.name.parts[entry.name.parts.length - 1] === screenName)
+                        : entry.name.parts[0] === moduleName && entry.name.parts[entry.name.parts.length - 1] === screenName)
                 ) {
-                    return stateNode
+                    states.push(stateNode)
+                    break
                 }
             }
         }
 
-        return null
+        return states
+    }
+
+    private describeInvalidReturnForState(stateNode: StateNode, producedContext: string, prefix: string): string {
+        const expected = this.extractReturnedContexts(stateNode).join(', ') || 'none'
+        return `${prefix}, but state '${stateNode.name}' does not return '${producedContext}' (state returns: ${expected})`
     }
 
     private resolveInterfaceName(

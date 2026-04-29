@@ -597,6 +597,92 @@ screen OrderSummaryScreen (
         )
         expect(diag).toBeDefined()
     })
+
+    it('names the mounting state when a shared screen returns a context that only some states allow', () => {
+        const dir = buildTestProject({
+            'TestApp.wds': `
+system TestApp (
+    modules ( AppointmentsModule )
+    interface (
+        getContext name(string) returns(context) "desc"
+        setContext name(string) value(context) "desc"
+        dropContext name(string) "desc"
+    )
+)
+      `.trim(),
+            'AppointmentsModule/AppointmentsModule.wds': `
+module AppointmentsModule (
+    process Flow (
+        when ViewingAppointments returns AppointmentBookingRequest
+            enter ViewingAppointments "book"
+        when ViewingAppointments returns AppointmentsError
+            enter LoadingAppointments "reload"
+        when LoadingAppointments returns AppointmentList
+            enter ViewingAppointments "loaded"
+        when LoadingAppointments returns AppointmentsError
+            enter LoadingAppointments "retry"
+    )
+    start LoadingAppointments
+)
+      `.trim(),
+            'AppointmentsModule/states/LoadingAppointments.wds': `
+module AppointmentsModule
+state LoadingAppointments receives AppointmentsError (
+    returns AppointmentList, AppointmentsError
+    uses screen AppointmentsScreen
+)
+      `.trim(),
+            'AppointmentsModule/states/ViewingAppointments.wds': `
+module AppointmentsModule
+state ViewingAppointments receives AppointmentList (
+    returns AppointmentBookingRequest, AppointmentsError
+    uses screen AppointmentsScreen
+)
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentList.wds': `
+module AppointmentsModule
+context AppointmentList ( appointments(list(string)) )
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentsError.wds': `
+module AppointmentsModule
+context AppointmentsError ( message(string) )
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentBookingRequest.wds': `
+module AppointmentsModule
+context AppointmentBookingRequest ( appointmentId(string) )
+      `.trim(),
+            'AppointmentsModule/screens/AppointmentsScreen.wds': `
+module AppointmentsModule
+screen AppointmentsScreen (
+    uses (
+        view AppointmentListView (
+            onBook is (
+                state.return(bookingRequest)
+            )
+        )
+    )
+)
+      `.trim(),
+            'AppointmentsModule/views/AppointmentListView.wds': `
+module AppointmentsModule
+view AppointmentListView (
+    props (
+        onBook bookingRequest(AppointmentBookingRequest)
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        const diag = diagnostics.find(d =>
+            d.diagnostic.code === DiagnosticCode.A_INVALID_STATE_RETURN &&
+            d.diagnostic.message.includes("state 'LoadingAppointments'") &&
+            d.diagnostic.message.includes("does not return 'AppointmentBookingRequest'")
+        )
+
+        expect(diag?.diagnostic.message).toContain('state returns: AppointmentList, AppointmentsError')
+    })
 })
 
 // ── Workspace — construct paths ───────────────────────────────────────────────

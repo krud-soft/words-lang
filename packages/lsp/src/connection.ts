@@ -143,6 +143,10 @@ export class WordsConnection {
 
         const currentFilePath = uriToPath(params.textDocument.uri)
 
+        // Construct name in its own file → show constructs that consume/use it.
+        const constructConsumers = this.resolveConsumersForConstructName(currentFilePath, word)
+        if (constructConsumers.length > 0) return constructConsumers
+
         // `state` inside a component file → show all states that use this component
         if (word === 'state') {
             const states = this.resolveStatesUsingComponent(currentFilePath)
@@ -604,6 +608,83 @@ export class WordsConnection {
     }
 
     /**
+     * If `word` is the construct defined by `constructFilePath`, returns all
+     * constructs whose uses tree references it. VS Code presents multiple
+     * definition locations as a selectable list/peek view.
+     */
+    private resolveConsumersForConstructName(constructFilePath: string, word: string): Location[] {
+        const target = this.resolveConstructByFilePath(constructFilePath)
+        if (!target || target.name !== word) return []
+
+        return this.resolveConstructConsumers(target.moduleName, target.name)
+    }
+
+    private resolveConstructByFilePath(filePath: string): { moduleName: string; name: string } | null {
+        if (!this.workspace) return null
+
+        for (const [key, constructPath] of this.workspace.constructPaths) {
+            if (constructPath !== filePath) continue
+            const [moduleName, name] = key.split('/')
+            if (moduleName && name) return { moduleName, name }
+        }
+
+        return null
+    }
+
+    private resolveConstructConsumers(targetModuleName: string, targetName: string): Location[] {
+        if (!this.workspace) return []
+
+        const locations: Location[] = []
+
+        this.collectConstructConsumers(this.workspace.states, targetModuleName, targetName, locations)
+        this.collectConstructConsumers(this.workspace.screens, targetModuleName, targetName, locations)
+        this.collectConstructConsumers(this.workspace.views, targetModuleName, targetName, locations)
+        this.collectConstructConsumers(this.workspace.interfaces, targetModuleName, targetName, locations)
+
+        return locations
+    }
+
+    private collectConstructConsumers(
+        moduleIndex: Map<string, Map<string, { token: { line: number; column: number; value: string }; uses?: unknown[] }>>,
+        targetModuleName: string,
+        targetName: string,
+        locations: Location[]
+    ): void {
+        if (!this.workspace) return
+
+        for (const [consumerModuleName, constructMap] of moduleIndex) {
+            for (const [consumerName, constructNode] of constructMap) {
+                const uses = constructNode.uses ?? []
+                if (!this.usesTreeReferencesConstruct(uses, consumerModuleName, targetModuleName, targetName)) continue
+
+                const filePath = this.workspace.constructPaths.get(`${consumerModuleName}/${consumerName}`)
+                if (filePath) locations.push(tokenLocation(filePath, constructNode.token))
+            }
+        }
+    }
+
+    private usesTreeReferencesConstruct(
+        uses: unknown[],
+        consumerModuleName: string,
+        targetModuleName: string,
+        targetName: string
+    ): boolean {
+        for (const entry of uses) {
+            if (!isUseEntryLike(entry)) continue
+
+            if (entry.kind === 'ComponentUse') {
+                const resolved = resolveUsedConstruct(entry.name.parts, entry.componentKind, consumerModuleName)
+                if (resolved?.moduleName === targetModuleName && resolved.name === targetName) return true
+                if (this.usesTreeReferencesConstruct(entry.uses, consumerModuleName, targetModuleName, targetName)) return true
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                if (this.usesTreeReferencesConstruct(entry.body, consumerModuleName, targetModuleName, targetName)) return true
+            }
+        }
+
+        return false
+    }
+
+    /**
      * Given a method name, searches all module inline interfaces to determine
      * whether it belongs to a named (handler) interface or an anonymous one,
      * then returns the appropriate references:
@@ -724,6 +805,39 @@ function fileLocation(filePath: string): Location {
  */
 function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_]/.test(ch)
+}
+
+function isUseEntryLike(value: unknown): value is {
+    kind: string
+    componentKind: string
+    name: { parts: string[] }
+    uses: unknown[]
+    body: unknown[]
+} {
+    return typeof value === 'object' && value !== null && 'kind' in value
+}
+
+function resolveUsedConstruct(
+    parts: string[],
+    componentKind: string,
+    consumerModuleName: string
+): { moduleName: string; name: string } | null {
+    if (parts.length === 0) return null
+
+    if (parts[0] === 'system') {
+        if (parts.length < 3) return null
+        return { moduleName: parts[1], name: parts[2] }
+    }
+
+    if (parts.length === 1) {
+        return { moduleName: consumerModuleName, name: parts[0] }
+    }
+
+    if (componentKind === 'adapter' && parts.length === 2) {
+        return { moduleName: consumerModuleName, name: parts[0] }
+    }
+
+    return { moduleName: parts[0], name: parts[1] }
 }
 
 /**

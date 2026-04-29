@@ -71,7 +71,7 @@ Every node has `kind` (discriminant) and `token` (first token, for diagnostics/L
 | `ReturnsNode` | `SimpleReturns ExpandedReturns` |
 | `ExpressionNode` | `AccessExpression CallExpression StateReturnExpression BlockExpression` + literals |
 | `StatementNode` | `AssignmentStatement StateReturnStatement` |
-| `UseEntryNode` | `ComponentUse ConditionalBlock IterationBlock` |
+| `UseEntryNode` | `ComponentUse ConditionalBlock IterationBlock CallExpression` |
 
 **`ModuleNode.implements`** is `(ImplementsHandlerNode | ImplementsCallbackNode)[]` — distinguish by `impl.kind`.
 
@@ -185,6 +185,12 @@ onLogout is (
     state.return ContextType (
         field is value
     )
+)
+
+// State uses block with system runtime calls
+uses (
+    system.setContext name is ContextType, value is state.context,
+    screen SomeScreen
 )
 
 // Expanded returns with side effects

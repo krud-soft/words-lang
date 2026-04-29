@@ -793,6 +793,28 @@ state Authenticated receives SystemUser (
         expect(dispatch.args[0].name).toBe('path')
     })
 
+    it('rejects inline system call arguments', () => {
+        const src = `
+module AuthModule
+state ReAuthenticating receives ReAuthCredentials (
+    returns (
+        ReAuthToken (
+            system.setContext name is ReAuthToken, value is context
+            system.AuthModule.dispatchReAuthCompleted token is context
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics.map(d => d.code)).toContain(DiagnosticCode.P_INLINE_SYSTEM_ARGUMENTS)
+        expect(diagnostics[0].message).toContain('parenthesized argument block')
+
+        const state = document.nodes[0] as StateNode
+        const returns = state.returns as ExpandedReturnsNode
+        expect(returns.entries[0].sideEffects[0].args).toHaveLength(0)
+    })
+
     it('parses bare context property access in screens', () => {
         const src = `
 module AuthModule

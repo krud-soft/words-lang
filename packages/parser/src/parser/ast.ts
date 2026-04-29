@@ -232,8 +232,8 @@ export interface SimpleReturnsNode extends BaseNode {
  * Side effects execute before the context is produced and the module transitions.
  *
  * Examples:
- *   `system.setContext name is SessionToken, value is context`
- *   `system.dropContext name is SessionToken`
+ *   `system.setContext ( name is SessionToken, value is context )`
+ *   `system.dropContext ( name is SessionToken )`
  */
 export interface SideEffectNode extends BaseNode {
     kind: 'SideEffect'
@@ -258,10 +258,10 @@ export interface ExpandedReturnNode extends BaseNode {
  * Example:
  *   returns (
  *     SessionToken (
- *       system.setContext name is SessionToken, value is context
+ *       system.setContext ( name is SessionToken, value is context )
  *     )
  *     SessionValidationError (
- *       system.dropContext name is SessionToken
+ *       system.dropContext ( name is SessionToken )
  *     )
  *   )
  */

@@ -242,9 +242,6 @@ ReturnsType =
 ArgumentList =
   Argument ("," Argument)*
 
-InlineArgumentList =
-  Argument ("," Argument)*
-
 Argument =
   CamelIdent "is" Expression
 
@@ -275,10 +272,10 @@ Condition =
   AccessExpression ("is" | "is not") Expression
 
 SystemCall =
-  AccessExpression ("(" (ArgumentList | PascalIdent)? ")" | InlineArgumentList)?
+  AccessExpression ("(" (ArgumentList | PascalIdent)? ")")?
 
 CallExpression =
-  AccessExpression "(" ArgumentList? ")"
+  AccessExpression "(" (ArgumentList | PascalIdent)? ")"
 
 AccessExpression =
   Identifier ("." Identifier)*

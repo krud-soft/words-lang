@@ -854,7 +854,7 @@ export class Parser {
                                 const callTok = this.current()
                                 const call = this.parseQualifiedName()
                                 this.skipTrivia()
-                                const args = this.parseCallArgsAfterCallee()
+                                const args = this.parseSystemCallArgsAfterCallee()
                                 sideEffects.push({ kind: 'SideEffect', token: callTok, call, args })
                             } else if (!this.check(TokenType.RParen)) {
                                 this.advance()
@@ -1138,15 +1138,33 @@ export class Parser {
     }
 
     /**
-     * Parses call arguments after the callee path has already been consumed.
-     * Supports both documented `callee ( name is value )` calls and the older
-     * inline form `callee name is value`.
+     * Parses statement-level system call arguments after the callee path has
+     * already been consumed. Named arguments must be inside parentheses.
      */
-    private parseCallArgsAfterCallee(): ArgumentNode[] {
+    private parseSystemCallArgsAfterCallee(): ArgumentNode[] {
         if (this.check(TokenType.LParen)) {
             return this.parseParenthesizedCallArgs()
         }
-        return this.parseInlineArgList()
+
+        if (this.checkArgumentStart()) {
+            this.rejectInlineSystemArguments()
+        }
+
+        return []
+    }
+
+    /**
+     * System calls use the same parenthesized named-argument block as component
+     * calls. Consume the old inline form for recovery, but do not attach it to
+     * the AST.
+     */
+    private rejectInlineSystemArguments(): void {
+        this.error(
+            DiagnosticCode.P_INLINE_SYSTEM_ARGUMENTS,
+            `Unexpected inline system argument '${this.current().value}' — use a parenthesized argument block`,
+            this.current()
+        )
+        this.parseInlineArgList()
     }
 
     /**
@@ -1990,7 +2008,7 @@ export class Parser {
         const tok = this.current()
         const callee = this.parseAccessExpression()
         this.skipTrivia()
-        const args = this.parseCallArgsAfterCallee()
+        const args = this.parseSystemCallArgsAfterCallee()
         return { kind: 'CallExpression', token: tok, callee, args }
     }
 

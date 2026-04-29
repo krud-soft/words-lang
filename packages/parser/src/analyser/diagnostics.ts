@@ -106,6 +106,12 @@ export enum DiagnosticCode {
     /** `state.context` is not valid; screens read the current state data as `context`. */
     P_INVALID_STATE_CONTEXT = 'P013',
 
+    /**
+     * A system call passed arguments outside a parenthesized argument block.
+     * e.g. `system.setContext name is SessionToken`.
+     */
+    P_INLINE_SYSTEM_ARGUMENTS = 'P014',
+
     // ── Analyser errors ─────────────────────────────────────────────────────────
 
     /**

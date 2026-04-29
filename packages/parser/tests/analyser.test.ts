@@ -98,7 +98,10 @@ module CatalogModule "Manages order browsing and confirmation" (
                 enter OrderDiplaying "The /orders path activates the order display"
         )
     )
-    system.RoutingModule.subscribeRoute path is "/orders", handler is CatalogModule
+    system.RoutingModule.subscribeRoute (
+        path is "/orders",
+        handler is CatalogModule
+    )
     start OrderDiplaying
 )
   `.trim(),

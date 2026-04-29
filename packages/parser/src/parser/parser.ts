@@ -87,9 +87,8 @@ import { Token, TokenType } from '../lexer/token'
 import {
     Diagnostic,
     DiagnosticCode,
-    parseDiagnostic,
-    rangeFromToken,
 } from '../analyser/diagnostics'
+import { ParserCursor } from './cursor'
 
 // ── Parse result ──────────────────────────────────────────────────────────────
 
@@ -106,17 +105,11 @@ export interface ParseResult {
 // ── Parser ────────────────────────────────────────────────────────────────────
 
 export class Parser {
-    /** The full token stream from the lexer, including EOF. */
-    private tokens: Token[]
-
-    /** Current position in the token stream. */
-    private pos: number = 0
-
-    /** Diagnostics collected during this parse. */
-    private diagnostics: Diagnostic[] = []
+    /** Token-stream cursor and parse diagnostic collector. */
+    private cursor: ParserCursor
 
     constructor(tokens: Token[]) {
-        this.tokens = tokens
+        this.cursor = new ParserCursor(tokens)
     }
 
     // ── Public API ─────────────────────────────────────────────────────────────
@@ -128,7 +121,7 @@ export class Parser {
      */
     parse(): ParseResult {
         const document = this.parseDocument()
-        return { document, diagnostics: this.diagnostics }
+        return { document, diagnostics: this.cursor.diagnostics }
     }
 
     // ── Document ───────────────────────────────────────────────────────────────
@@ -1787,23 +1780,29 @@ export class Parser {
 
     // ── Token stream helpers ───────────────────────────────────────────────────
 
+    private get pos(): number {
+        return this.cursor.position
+    }
+
+    private set pos(pos: number) {
+        this.cursor.position = pos
+    }
+
     /** Returns the token at the current position. */
     private current(): Token {
-        return this.tokens[this.pos] ?? this.tokens[this.tokens.length - 1]
+        return this.cursor.current()
     }
 
     /** Returns true if the current token has the given type. */
     private check(type: TokenType): boolean {
-        return this.current().type === type
+        return this.cursor.check(type)
     }
 
     /**
      * Consumes and returns the current token, advancing the position.
      */
     private advance(): Token {
-        const tok = this.current()
-        if (tok.type !== TokenType.EOF) this.pos++
-        return tok
+        return this.cursor.advance()
     }
 
     /**
@@ -1811,14 +1810,7 @@ export class Parser {
      * If it does not match, emits a diagnostic and returns null without advancing.
      */
     private expect(type: TokenType): Token | null {
-        if (this.check(type)) return this.advance()
-        const tok = this.current()
-        this.error(
-            DiagnosticCode.P_UNEXPECTED_TOKEN,
-            `Expected '${type}' but found '${tok.value}'`,
-            tok
-        )
-        return null
+        return this.cursor.expect(type)
     }
 
     /**
@@ -1826,16 +1818,7 @@ export class Parser {
      * Emits a diagnostic if neither is present.
      */
     private expectIdent(context: string): string {
-        if (this.check(TokenType.PascalIdent) || this.check(TokenType.CamelIdent)) {
-            return this.advance().value
-        }
-        const tok = this.current()
-        this.error(
-            DiagnosticCode.P_MISSING_IDENTIFIER,
-            `Expected identifier (${context}) but found '${tok.value}'`,
-            tok
-        )
-        return '?'
+        return this.cursor.expectIdent(context)
     }
 
     /**
@@ -1843,11 +1826,7 @@ export class Parser {
      * Returns null without advancing if it is not.
      */
     private parseOptionalString(): string | null {
-        if (this.check(TokenType.StringLit)) {
-            const val = this.advance().value
-            return val.slice(1, -1)
-        }
-        return null
+        return this.cursor.parseOptionalString()
     }
 
     /**
@@ -1855,29 +1834,21 @@ export class Parser {
      * Used for error recovery inside type annotations — consumes the ')' itself.
      */
     private syncToClosingParen(): void {
-        let depth = 0
-        while (!this.check(TokenType.EOF)) {
-            if (this.check(TokenType.LParen)) { depth++; this.advance(); continue }
-            if (this.check(TokenType.RParen)) {
-                if (depth === 0) { this.advance(); return }
-                depth--
-            }
-            this.advance()
-        }
+        this.cursor.syncToClosingParen()
     }
 
     /**
      * Skips comment tokens only.
      */
     private skipComments(): void {
-        while (this.check(TokenType.Comment)) this.advance()
+        this.cursor.skipComments()
     }
 
     /**
      * Skips comments and newlines — the whitespace between meaningful tokens.
      */
     private skipTrivia(): void {
-        while (this.check(TokenType.Comment) || this.check(TokenType.Newline)) this.advance()
+        this.cursor.skipTrivia()
     }
 
     /**
@@ -1901,13 +1872,7 @@ export class Parser {
      * list rather than separating two use entries.
      */
     private peekPastTriviaIsCamelIdent(): boolean {
-        let i = this.pos + 1
-        while (i < this.tokens.length) {
-            const t = this.tokens[i]
-            if (t.type === TokenType.Newline || t.type === TokenType.Comment) { i++; continue }
-            return t.type === TokenType.CamelIdent
-        }
-        return false
+        return this.cursor.peekPastTriviaIsCamelIdent()
     }
 
     /**
@@ -1933,22 +1898,14 @@ export class Parser {
      * for an Unknown token with value `[` followed by one with value `]`.
      */
     private checkListLiteral(): boolean {
-        return (
-            this.current().type === TokenType.Unknown &&
-            this.current().value === '[' &&
-            this.tokens[this.pos + 1]?.value === ']'
-        )
+        return this.cursor.checkListLiteral()
     }
 
     /**
      * Returns true if the current two tokens form a `{` `}` map literal.
      */
     private checkMapLiteral(): boolean {
-        return (
-            this.current().type === TokenType.Unknown &&
-            this.current().value === '{' &&
-            this.tokens[this.pos + 1]?.value === '}'
-        )
+        return this.cursor.checkMapLiteral()
     }
 
     /**
@@ -1969,8 +1926,7 @@ export class Parser {
      * Emits a diagnostic at the given token's position.
      */
     private error(code: DiagnosticCode, message: string, tok: Token): void {
-        const range = rangeFromToken(tok.line, tok.column, tok.value.length || 1)
-        this.diagnostics.push(parseDiagnostic(code, message, 'error', range))
+        this.cursor.error(code, message, tok)
     }
 
     /**
@@ -1979,22 +1935,6 @@ export class Parser {
      * Synchronisation points: top-level keyword, closing paren, or EOF.
      */
     private synchronise(): void {
-        while (!this.check(TokenType.EOF)) {
-            switch (this.current().type) {
-                case TokenType.System:
-                case TokenType.Module:
-                case TokenType.State:
-                case TokenType.Context:
-                case TokenType.Screen:
-                case TokenType.View:
-                case TokenType.Provider:
-                case TokenType.Adapter:
-                case TokenType.Interface:
-                case TokenType.RParen:
-                    return
-                default:
-                    this.advance()
-            }
-        }
+        this.cursor.synchronise()
     }
 }

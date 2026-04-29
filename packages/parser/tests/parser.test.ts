@@ -9,6 +9,7 @@ import {
     ScreenNode,
     ViewNode,
     AdapterNode,
+    InterfaceNode,
     SimpleReturnsNode,
     ExpandedReturnsNode,
 } from '../src/parser/ast'
@@ -565,6 +566,131 @@ adapter AuthAdapter "Connects to the authentication service" (
         expect(adapter.methods[0].returnType?.kind).toBe('NamedType')
         expect(adapter.methods[1].name).toBe('logout')
         expect(adapter.methods[1].returnType).toBeNull()
+    })
+
+})
+
+// ── Characterization ──────────────────────────────────────────────────────────
+
+describe('Parser — characterization', () => {
+
+    it('parses positional PascalIdent system call arguments', () => {
+        const src = `
+module CatalogModule
+screen OrderSummaryScreen (
+    uses (
+        view AppUIModule.NavigationBar (
+            currentUser is system.getContext(SystemUser)
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const navBar = screen.uses[0] as any
+        const currentUser = navBar.args[0]
+        expect(currentUser.value.kind).toBe('CallExpression')
+        expect(currentUser.value.args).toHaveLength(1)
+        expect(currentUser.value.args[0].name).toBe('')
+        expect(currentUser.value.args[0].value.path).toEqual(['SystemUser'])
+    })
+
+    it('parses map iteration with key and value bindings', () => {
+        const src = `
+module CatalogModule
+screen CatalogueScreen (
+    uses (
+        for state.context.productsByCategory as category, products (
+            view UIModule.CategorySection (
+                title is category,
+                items is products
+            )
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const iter = screen.uses[0] as any
+        expect(iter.kind).toBe('IterationBlock')
+        expect(iter.bindings).toEqual(['category', 'products'])
+    })
+
+    it('parses empty map defaults in local state', () => {
+        const src = `
+module CatalogModule
+view FilterPanel (
+    state (
+        selectedById(map(string, Product)) is {}
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const view = document.nodes[0] as ViewNode
+        expect(view.state).toHaveLength(1)
+        expect(view.state[0].defaultValue?.kind).toBe('MapLiteral')
+    })
+
+    it('parses inline adapter arguments without a parenthesized body', () => {
+        const src = `
+module SessionModule
+state SessionValidating receives StoredSession (
+    returns SessionToken
+    uses adapter SessionAdapter.validateSession existing is state.context
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const state = document.nodes[0] as StateNode
+        const adapterUse = state.uses[0] as any
+        expect(adapterUse.componentKind).toBe('adapter')
+        expect(adapterUse.name.parts).toEqual(['SessionAdapter', 'validateSession'])
+        expect(adapterUse.args[0].name).toBe('existing')
+    })
+
+    it('parses interface component bodies with props, state, uses, and methods', () => {
+        const src = `
+module ProductsModule
+interface ProductDetails "Loads and exposes product details" (
+    props (
+        id(string)
+    )
+    state (
+        reviews(list(ProductReview)) is []
+    )
+    uses (
+        adapter system.ProductsModule.ProductsAdapter.loadReviews (
+            productId is props.id,
+            onLoad is (
+                state.reviews is reviews
+            )
+        )
+    )
+    getReviews returns(list(ProductReview))
+        "Returns loaded reviews"
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const iface = document.nodes[0] as InterfaceNode
+        expect(iface.props).toHaveLength(1)
+        expect(iface.state).toHaveLength(1)
+        expect(iface.uses).toHaveLength(1)
+        expect(iface.methods).toHaveLength(1)
+        expect(iface.methods[0].name).toBe('getReviews')
     })
 
 })

@@ -102,6 +102,19 @@ export interface ParseResult {
     diagnostics: Diagnostic[]
 }
 
+interface ComponentBodyOptions {
+    allowUses?: boolean
+    allowDirectMethods?: boolean
+    allowInterfaceMethodBlock?: boolean
+}
+
+interface ParsedComponentBody {
+    props: PropNode[]
+    stateFields: PropNode[]
+    uses: UseEntryNode[]
+    methods: MethodNode[]
+}
+
 // ── Parser ────────────────────────────────────────────────────────────────────
 
 export class Parser {
@@ -297,8 +310,7 @@ export class Parser {
         const subscriptions: CallExpressionNode[] = []
         const inlineInterfaces: InterfaceNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.Process)) {
                 processes.push(this.parseProcess())
             } else if (this.check(TokenType.Start)) {
@@ -314,7 +326,7 @@ export class Parser {
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen)
         return {
@@ -346,14 +358,13 @@ export class Parser {
 
         const rules: WhenRuleNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.When)) {
                 rules.push(this.parseWhenRule())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen)
         return { kind: 'Process', token: tok, name, description, rules }
@@ -458,14 +469,13 @@ export class Parser {
 
         const branches: ImplementsBranchNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.If)) {
                 branches.push(this.parseImplementsBranch())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen) // close method body
         this.skipTrivia()
@@ -491,14 +501,13 @@ export class Parser {
 
         const enterActions: ImplementsEnterActionNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.Enter)) {
                 enterActions.push(this.parseImplementsEnterAction())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen) // close method body
         this.skipTrivia()
@@ -589,8 +598,7 @@ export class Parser {
         let returns: ReturnsNode | null = null
         const uses: UseEntryNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.Returns)) {
                 returns = this.parseReturns()
             } else if (this.check(TokenType.Uses)) {
@@ -598,7 +606,7 @@ export class Parser {
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen)
         return { kind: 'State', token: tok, module: '', name, receives, receivesOptional, returns, uses }
@@ -643,14 +651,13 @@ export class Parser {
 
         const uses: UseEntryNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.Uses)) {
                 uses.push(...this.parseUsesBlock())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen)
         return { kind: 'Screen', token: tok, module: '', name, description, uses }
@@ -673,25 +680,10 @@ export class Parser {
         this.skipTrivia()
         this.expect(TokenType.LParen)
 
-        let props: PropNode[] = []
-        let stateFields: PropNode[] = []
-        const uses: UseEntryNode[] = []
-
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
-            if (this.check(TokenType.Props)) {
-                props = this.parsePropDeclarationBlock(TokenType.Props)
-            } else if (this.check(TokenType.State)) {
-                stateFields = this.parsePropDeclarationBlock(TokenType.State)
-            } else if (this.check(TokenType.Uses)) {
-                uses.push(...this.parseUsesBlock())
-            } else if (!this.check(TokenType.RParen)) {
-                this.advance()
-            }
-        }
+        const body = this.parseComponentBody({ allowUses: true })
 
         this.expect(TokenType.RParen)
-        return { kind: 'View', token: tok, module: '', name, description, props, state: stateFields, uses }
+        return { kind: 'View', token: tok, module: '', name, description, props: body.props, state: body.stateFields, uses: body.uses }
     }
 
     /**
@@ -711,25 +703,10 @@ export class Parser {
         this.skipTrivia()
         this.expect(TokenType.LParen)
 
-        let props: PropNode[] = []
-        let stateFields: PropNode[] = []
-        const methods: MethodNode[] = []
-
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
-            if (this.check(TokenType.Props)) {
-                props = this.parsePropDeclarationBlock(TokenType.Props)
-            } else if (this.check(TokenType.State)) {
-                stateFields = this.parsePropDeclarationBlock(TokenType.State)
-            } else if (this.check(TokenType.Interface)) {
-                methods.push(...this.parseInterfaceMethodBlock())
-            } else if (!this.check(TokenType.RParen)) {
-                this.advance()
-            }
-        }
+        const body = this.parseComponentBody({ allowInterfaceMethodBlock: true })
 
         this.expect(TokenType.RParen)
-        return { kind: 'Provider', token: tok, module: '', name, description, props, state: stateFields, methods }
+        return { kind: 'Provider', token: tok, module: '', name, description, props: body.props, state: body.stateFields, methods: body.methods }
     }
 
     /**
@@ -749,25 +726,10 @@ export class Parser {
         this.skipTrivia()
         this.expect(TokenType.LParen)
 
-        let props: PropNode[] = []
-        let stateFields: PropNode[] = []
-        const methods: MethodNode[] = []
-
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
-            if (this.check(TokenType.Props)) {
-                props = this.parsePropDeclarationBlock(TokenType.Props)
-            } else if (this.check(TokenType.State)) {
-                stateFields = this.parsePropDeclarationBlock(TokenType.State)
-            } else if (this.check(TokenType.Interface)) {
-                methods.push(...this.parseInterfaceMethodBlock())
-            } else if (!this.check(TokenType.RParen)) {
-                this.advance()
-            }
-        }
+        const body = this.parseComponentBody({ allowInterfaceMethodBlock: true })
 
         this.expect(TokenType.RParen)
-        return { kind: 'Adapter', token: tok, module: '', name, description, props, state: stateFields, methods }
+        return { kind: 'Adapter', token: tok, module: '', name, description, props: body.props, state: body.stateFields, methods: body.methods }
     }
 
     /**
@@ -795,31 +757,45 @@ export class Parser {
         this.skipTrivia()
         this.expect(TokenType.LParen)
 
+        const body = this.parseComponentBody({
+            allowUses: true,
+            allowDirectMethods: true,
+        })
+
+        this.expect(TokenType.RParen)
+        return { kind: 'Interface', token: tok, module: '', name, description, props: body.props, state: body.stateFields, methods: body.methods, uses: body.uses }
+    }
+
+    /**
+     * Parses the shared body shape used by view, provider, adapter, and interface
+     * constructs. The options describe which body entries are valid for the
+     * specific construct being parsed.
+     */
+    private parseComponentBody(options: ComponentBodyOptions): ParsedComponentBody {
         let props: PropNode[] = []
         let stateFields: PropNode[] = []
-        const methods: MethodNode[] = []
         const uses: UseEntryNode[] = []
+        const methods: MethodNode[] = []
 
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.Props)) {
                 props = this.parsePropDeclarationBlock(TokenType.Props)
             } else if (this.check(TokenType.State)) {
                 stateFields = this.parsePropDeclarationBlock(TokenType.State)
-            } else if (this.check(TokenType.Uses)) {
+            } else if (options.allowUses && this.check(TokenType.Uses)) {
                 uses.push(...this.parseUsesBlock())
-            } else if (this.check(TokenType.CamelIdent)) {
-                // Methods appear directly in the body after props.
-                // This includes handler interface method declarations whose body
-                // contains if-branches (e.g. `switch path(string) ( if ... )`).
+            } else if (options.allowInterfaceMethodBlock && this.check(TokenType.Interface)) {
+                methods.push(...this.parseInterfaceMethodBlock())
+            } else if (options.allowDirectMethods && this.check(TokenType.CamelIdent)) {
+                // Methods appear directly in interface component bodies.
+                // Handler interface declarations may include a discarded branch body.
                 methods.push(this.parseInterfaceMethod())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
-        this.expect(TokenType.RParen)
-        return { kind: 'Interface', token: tok, module: '', name, description, props, state: stateFields, methods, uses }
+        return { props, stateFields, uses, methods }
     }
 
     // ── Returns clause ─────────────────────────────────────────────────────────
@@ -921,17 +897,12 @@ export class Parser {
      */
     private parseUseEntries(): UseEntryNode[] {
         const entries: UseEntryNode[] = []
-        let lastPos = -1
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            if (this.pos === lastPos) { this.advance(); continue }
-            lastPos = this.pos
-            this.skipTrivia()
-            if (this.check(TokenType.RParen)) break
+        this.parseUntilRParen(() => {
             const entry = this.parseUseEntry()
             if (entry) entries.push(entry)
             this.skipTrivia()
             this.consumeOptionalComma()
-        }
+        })
         return entries
     }
 
@@ -1602,14 +1573,13 @@ export class Parser {
         this.expect(TokenType.LParen)
 
         const methods: MethodNode[] = []
-        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
-            this.skipTrivia()
+        this.parseUntilRParen(() => {
             if (this.check(TokenType.CamelIdent)) {
                 methods.push(this.parseMethod())
             } else if (!this.check(TokenType.RParen)) {
                 this.advance()
             }
-        }
+        })
 
         this.expect(TokenType.RParen)
         return methods
@@ -1822,6 +1792,24 @@ export class Parser {
      */
     private skipTrivia(): void {
         this.cursor.skipTrivia()
+    }
+
+    /**
+     * Runs `parseEntry` until the current parenthesized block closes.
+     * The guard forces progress if a recovery path forgets to consume a token.
+     */
+    private parseUntilRParen(parseEntry: () => void): void {
+        let lastPos = -1
+        while (!this.check(TokenType.RParen) && !this.check(TokenType.EOF)) {
+            if (this.pos === lastPos) {
+                this.advance()
+                continue
+            }
+            lastPos = this.pos
+            this.skipTrivia()
+            if (this.check(TokenType.RParen)) break
+            parseEntry()
+        }
     }
 
     /**

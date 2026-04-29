@@ -117,6 +117,12 @@ export enum TokenType {
    */
   Implements = 'implements',
 
+  /**
+   * `includes` — declares explicit interface polymorphism.
+   * e.g. `interface AdminUser includes UserIdentity ( ... )`
+   */
+  Includes = 'includes',
+
   // ── Process / transition keywords ────────────────────────────────────────
 
   /**

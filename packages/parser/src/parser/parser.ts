@@ -753,6 +753,8 @@ export class Parser {
         // exposes methods directly without a named handler shape.
         const name = this.check(TokenType.LParen) ? '' : this.expectIdent('interface name')
         this.skipTrivia()
+        const includes = name === '' ? [] : this.parseOptionalIncludesClause()
+        this.skipTrivia()
         const description = this.parseOptionalString()
         this.skipTrivia()
         this.expect(TokenType.LParen)
@@ -763,7 +765,29 @@ export class Parser {
         })
 
         this.expect(TokenType.RParen)
-        return { kind: 'Interface', token: tok, module: '', name, description, props: body.props, state: body.stateFields, methods: body.methods, uses: body.uses }
+        return { kind: 'Interface', token: tok, module: '', name, includes, description, props: body.props, state: body.stateFields, methods: body.methods, uses: body.uses }
+    }
+
+    /**
+     * Parses an optional interface includes clause:
+     *   includes UserIdentity, SharedModule.AuditActor
+     */
+    private parseOptionalIncludesClause(): QualifiedName[] {
+        const includes: QualifiedName[] = []
+        if (!this.check(TokenType.Includes)) return includes
+
+        this.advance()
+        this.skipTrivia()
+
+        includes.push(this.parseQualifiedName())
+        this.skipTrivia()
+        while (this.consumeOptionalComma()) {
+            this.skipTrivia()
+            includes.push(this.parseQualifiedName())
+            this.skipTrivia()
+        }
+
+        return includes
     }
 
     /**
@@ -830,7 +854,7 @@ export class Parser {
                                 const callTok = this.current()
                                 const call = this.parseQualifiedName()
                                 this.skipTrivia()
-                                const args = this.parseInlineArgList()
+                                const args = this.parseCallArgsAfterCallee()
                                 sideEffects.push({ kind: 'SideEffect', token: callTok, call, args })
                             } else if (!this.check(TokenType.RParen)) {
                                 this.advance()
@@ -1105,6 +1129,36 @@ export class Parser {
     }
 
     /**
+     * Parses call arguments after the callee path has already been consumed.
+     * Supports both documented `callee ( name is value )` calls and the older
+     * inline form `callee name is value`.
+     */
+    private parseCallArgsAfterCallee(): ArgumentNode[] {
+        if (this.check(TokenType.LParen)) {
+            return this.parseParenthesizedCallArgs()
+        }
+        return this.parseInlineArgList()
+    }
+
+    /**
+     * Parses a parenthesized call argument block. In addition to named
+     * arguments, it preserves the existing positional PascalIdent shorthand
+     * used by `system.getContext(SystemUser)`.
+     */
+    private parseParenthesizedCallArgs(): ArgumentNode[] {
+        this.expect(TokenType.LParen)
+        const args = this.parseArguments()
+        if (args.length === 0 && this.check(TokenType.PascalIdent)) {
+            const valTok = this.current()
+            const valName = this.advance().value
+            const value: AccessExpressionNode = { kind: 'AccessExpression', token: valTok, path: [valName] }
+            args.push({ kind: 'Argument', token: valTok, name: '', value })
+        }
+        this.expect(TokenType.RParen)
+        return args
+    }
+
+    /**
      * Parses a single argument: `name is value`
      */
     private parseArgument(): ArgumentNode {
@@ -1130,7 +1184,7 @@ export class Parser {
      * Handles:
      *   - Block expressions:          `( state.return(x) )`
      *   - state.return():             `state.return(contextName)`
-     *   - Access expressions:         `state.context.fullName`, `props.items`
+     *   - Access expressions:         `context.fullName`, `state.context.fullName`, `props.items`
      *   - Call expressions:           `system.getContext(SystemUser)`
      *   - Literals:                   `"string"`, `42`, `3.14`, `true`, `false`, `[]`, `{}`
      *   - PascalCase type references: `SystemUser` (e.g. in system.getContext(SystemUser))
@@ -1165,6 +1219,7 @@ export class Parser {
         // 'state', or 'system'
         if (
             this.check(TokenType.CamelIdent) ||
+            this.check(TokenType.Context) ||
             this.check(TokenType.State) ||
             this.check(TokenType.System) ||
             this.check(TokenType.Props)
@@ -1218,8 +1273,9 @@ export class Parser {
             this.expect(TokenType.Dot)
             this.skipTrivia()
 
-            // state.return ContextType ( args )  — new form
-            // state.return(contextName)           — old form
+            // state.return ContextType ( args )       — inline construction form
+            // state.return(value is contextName)       — named value form
+            // state.return(contextName)                — old arg-binding form
             if (this.check(TokenType.CamelIdent) && this.current().value === 'return') {
                 this.advance() // consume 'return'
                 this.skipTrivia()
@@ -1236,9 +1292,23 @@ export class Parser {
                     return { kind: 'StateReturnStatement', token: tok, contextName, contextNameToken, inlineContext } as StateReturnStatementNode
                 }
 
-                // Old form: state.return(contextName)
                 this.expect(TokenType.LParen)
                 this.skipTrivia()
+
+                // Named value form: state.return(value is credentials)
+                if (this.checkStateReturnValueArgument()) {
+                    const arg = this.parseArgument()
+                    this.skipTrivia()
+                    this.expect(TokenType.RParen)
+                    if (arg.value.kind === 'AccessExpression' && arg.value.path.length > 0) {
+                        const contextNameToken = arg.value.token
+                        const contextName = arg.value.path[arg.value.path.length - 1]
+                        return { kind: 'StateReturnStatement', token: tok, contextName, contextNameToken, inlineContext: null } as StateReturnStatementNode
+                    }
+                    return { kind: 'StateReturnStatement', token: tok, contextName: '?', contextNameToken: arg.token, inlineContext: null } as StateReturnStatementNode
+                }
+
+                // Old form: state.return(contextName)
                 const contextNameToken = this.current()
                 const contextName = this.expectIdent('context name in state.return()')
                 this.skipTrivia()
@@ -1309,15 +1379,7 @@ export class Parser {
         // PascalIdent type reference (e.g. `system.getContext(SystemUser)`).
         // After the closing ')' may come further dot-segments: `.fullName`, `.avatarUrl`, etc.
         if (this.check(TokenType.LParen)) {
-            this.advance() // consume '('
-            const args = this.parseArguments()
-            if (args.length === 0 && this.check(TokenType.PascalIdent)) {
-                const valTok = this.current()
-                const valName = this.advance().value
-                const value: AccessExpressionNode = { kind: 'AccessExpression', token: valTok, path: [valName] }
-                args.push({ kind: 'Argument', token: valTok, name: '', value })
-            }
-            this.expect(TokenType.RParen)
+            const args = this.parseParenthesizedCallArgs()
             // Consume any trailing property access: system.getContext(SystemUser).fullName
             while (this.check(TokenType.Dot)) {
                 this.advance()
@@ -1839,6 +1901,23 @@ export class Parser {
     }
 
     /**
+     * Detects the documented `state.return(value is x)` form without stealing
+     * the older `state.return(value)` arg-binding form.
+     */
+    private checkStateReturnValueArgument(): boolean {
+        if (!this.check(TokenType.CamelIdent) || this.current().value !== 'value') {
+            return false
+        }
+
+        const saved = this.pos
+        this.advance()
+        this.skipTrivia()
+        const isValueArgument = this.check(TokenType.Is)
+        this.pos = saved
+        return isValueArgument
+    }
+
+    /**
      * Returns true if the first non-trivia token after the current position
      * is a CamelIdent. Used to decide whether a comma starts an inline argument
      * list rather than separating two use entries.
@@ -1888,7 +1967,7 @@ export class Parser {
         const tok = this.current()
         const callee = this.parseAccessExpression()
         this.skipTrivia()
-        const args = this.parseInlineArgList()
+        const args = this.parseCallArgsAfterCallee()
         return { kind: 'CallExpression', token: tok, callee, args }
     }
 

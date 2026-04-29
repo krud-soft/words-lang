@@ -693,6 +693,104 @@ interface ProductDetails "Loads and exposes product details" (
         expect(iface.methods[0].name).toBe('getReviews')
     })
 
+    it('parses interface includes clauses', () => {
+        const src = `
+module UsersModule
+interface StaffAdmin includes SharedModule.UserIdentity, AuditActor "Represents staff with audit permissions" (
+    props (
+        permissions(list(Permission))
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const iface = document.nodes[0] as InterfaceNode
+        expect(iface.name).toBe('StaffAdmin')
+        expect(iface.includes.map(name => name.parts)).toEqual([
+            ['SharedModule', 'UserIdentity'],
+            ['AuditActor'],
+        ])
+        expect(iface.description).toBe('Represents staff with audit permissions')
+    })
+
+    it('parses parenthesized system calls in uses blocks', () => {
+        const src = `
+module AuthModule
+state Authenticated receives SystemUser (
+    returns LogoutRequest
+    uses (
+        system.setContext (
+            name is SystemUser,
+            value is context
+        ),
+        system.RoutingModule.dispatch (
+            path is "/home"
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const state = document.nodes[0] as StateNode
+        const setContext = state.uses[0] as any
+        const dispatch = state.uses[1] as any
+        expect(setContext.kind).toBe('CallExpression')
+        expect(setContext.args.map((arg: any) => arg.name)).toEqual(['name', 'value'])
+        expect(setContext.args[1].value.path).toEqual(['context'])
+        expect(dispatch.args[0].name).toBe('path')
+    })
+
+    it('parses bare context property access in screens', () => {
+        const src = `
+module AuthModule
+screen LoginScreen (
+    uses (
+        view UIModule.Notification (
+            message is context.reason
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const notification = screen.uses[0] as any
+        expect(notification.args[0].value.path).toEqual(['context', 'reason'])
+    })
+
+    it('parses state.return with named value argument', () => {
+        const src = `
+module AuthModule
+screen LoginScreen (
+    uses (
+        view UIModule.LoginForm (
+            onSubmit is (
+                state.return (
+                    value is credentials
+                )
+            )
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const loginForm = screen.uses[0] as any
+        const onSubmit = loginForm.args[0]
+        const stmt = onSubmit.value.statements[0]
+        expect(stmt.kind).toBe('StateReturnStatement')
+        expect(stmt.contextName).toBe('credentials')
+    })
+
 })
 
 // ── Error recovery ────────────────────────────────────────────────────────────

@@ -143,7 +143,10 @@ AdapterDecl =
   "adapter" PascalIdent Description? "(" ProviderAdapterBody ")"
 
 InterfaceDecl =
-  "interface" PascalIdent? Description? "(" InterfaceBody ")"
+  "interface" PascalIdent? IncludesClause? Description? "(" InterfaceBody ")"
+
+IncludesClause =
+  "includes" QualifiedName ("," QualifiedName)*
 
 ComponentBody =
   PropsBlock? StateBlock? UsesClause?
@@ -263,6 +266,7 @@ Statement =
 
 StateReturnStatement =
   "state" "." "return" PascalIdent InlineContext?
+  | "state" "." "return" "(" "value" "is" AccessExpression ")"
   | "state" "." "return" "(" Identifier ")"
 
 AssignmentStatement =
@@ -272,7 +276,7 @@ Condition =
   AccessExpression ("is" | "is not") Expression
 
 SystemCall =
-  AccessExpression InlineArgumentList?
+  AccessExpression ("(" (ArgumentList | PascalIdent)? ")" | InlineArgumentList)?
 
 CallExpression =
   AccessExpression "(" ArgumentList? ")"
@@ -285,6 +289,9 @@ QualifiedName =
 
 Identifier =
   PascalIdent | CamelIdent | keyword-as-expression-root
+
+keyword-as-expression-root =
+  "context" | "props" | "state" | "system"
 
 Literal =
   StringLit | IntegerLit | FloatLit | BooleanLit | "[]" | "{}"

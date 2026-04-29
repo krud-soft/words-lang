@@ -61,6 +61,14 @@ describe('Lexer', () => {
         expect(tokens[5].type).toBe(TokenType.TMap)
     })
 
+    it('tokenizes interface includes as a keyword', () => {
+        const tokens = new Lexer('interface AdminUser includes UserIdentity').tokenize()
+        expect(tokens[0].type).toBe(TokenType.Interface)
+        expect(tokens[1].type).toBe(TokenType.PascalIdent)
+        expect(tokens[2].type).toBe(TokenType.Includes)
+        expect(tokens[3].type).toBe(TokenType.PascalIdent)
+    })
+
     it('tracks line and column positions', () => {
         const src = 'module AuthModule\nstate Unauthenticated'
         const tokens = new Lexer(src).tokenize()

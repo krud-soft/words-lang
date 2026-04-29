@@ -786,6 +786,9 @@ export interface AdapterNode extends BaseNode {
  * Used as a data model (Product, CartItem), a helper (CatalogueFilter),
  * a handler shape (RouteSwitchHandler), or a callable contract (Pagination).
  *
+ * `includes` stores explicit polymorphic relationships declared by the
+ * interface, such as `interface AdminUser includes UserIdentity`.
+ *
  * Interface components are the typed vocabulary that all other components
  * reference in their own props and method declarations.
  *
@@ -798,6 +801,7 @@ export interface InterfaceNode extends BaseNode {
     kind: 'Interface'
     module: string
     name: string
+    includes: QualifiedName[]
     description: string | null
     props: PropNode[]
     state: PropNode[]

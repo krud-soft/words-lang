@@ -498,11 +498,13 @@ export interface ComponentUseNode extends BaseNode {
  * - A direct component activation (screen, view, adapter, provider, interface)
  * - A conditional block (`if ...`)
  * - An iteration block (`for ... as ...`)
+ * - A system runtime call (`system.setContext`, `system.RoutingModule.dispatch`, …)
  */
 export type UseEntryNode =
     | ComponentUseNode
     | ConditionalBlockNode
     | IterationBlockNode
+    | CallExpressionNode
 
 // ── Process transition ────────────────────────────────────────────────────────
 

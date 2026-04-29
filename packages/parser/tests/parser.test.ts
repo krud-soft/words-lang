@@ -254,6 +254,36 @@ state SessionValidating receives StoredSession (
         expect(returns.entries[1].sideEffects).toHaveLength(1)
     })
 
+    it('parses a state uses block containing system calls and a screen component', () => {
+        const src = `
+module AuthModule
+state Authenticated receives PatientIdentity (
+    returns LogoutRequest
+    uses (
+        system.setContext name is PatientIdentity, value is state.context,
+        screen PortalHomeScreen
+    )
+)
+        `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const state = document.nodes[0] as StateNode
+        expect(state.uses).toHaveLength(2)
+
+        const sysCall = state.uses[0] as any
+        expect(sysCall.kind).toBe('CallExpression')
+        expect(sysCall.args).toHaveLength(2)
+        expect(sysCall.args[0].name).toBe('name')
+        expect(sysCall.args[1].name).toBe('value')
+
+        const screenUse = state.uses[1] as any
+        expect(screenUse.kind).toBe('ComponentUse')
+        expect(screenUse.componentKind).toBe('screen')
+        expect(screenUse.name.parts).toEqual(['PortalHomeScreen'])
+    })
+
 })
 
 // ── Context ───────────────────────────────────────────────────────────────────

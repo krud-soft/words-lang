@@ -1001,8 +1001,8 @@ export class Parser {
     }
 
     /**
-     * Parses a single use entry — a component use, a conditional block, or
-     * an iteration block.
+     * Parses a single use entry — a component use, a system call, a conditional
+     * block, or an iteration block.
      */
     private parseUseEntry(): UseEntryNode | null {
         this.skipTrivia()
@@ -1010,6 +1010,7 @@ export class Parser {
 
         if (this.check(TokenType.If)) return this.parseConditionalBlock()
         if (this.check(TokenType.For)) return this.parseIterationBlock()
+        if (this.checkSystemCall()) return this.parseSystemCall()
 
         // Component kinds: screen, view, adapter, provider, interface
         if (
@@ -1911,7 +1912,7 @@ export class Parser {
 
     /**
      * Returns true if the current token can start a use entry (component kind,
-     * if, or for).
+     * system call, if, or for).
      */
     private isUseEntry(): boolean {
         return (
@@ -1921,7 +1922,8 @@ export class Parser {
             this.check(TokenType.Provider) ||
             this.check(TokenType.Interface) ||
             this.check(TokenType.If) ||
-            this.check(TokenType.For)
+            this.check(TokenType.For) ||
+            this.check(TokenType.System)
         )
     }
 

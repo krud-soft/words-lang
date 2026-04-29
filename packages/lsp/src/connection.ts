@@ -29,6 +29,9 @@ import {
     InitializeResult,
     TextDocumentSyncKind,
     DefinitionParams,
+    CompletionItem,
+    CompletionItemKind,
+    CompletionParams,
     Location,
     Range,
     Position,
@@ -38,6 +41,12 @@ import {
 } from 'vscode-languageserver/node'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { Workspace, Analyser, Diagnostic, DiagnosticSeverity } from '@words-lang/parser'
+
+type ComponentCompletionKind = 'screen' | 'view' | 'provider' | 'adapter' | 'interface'
+type WordsCompletionContext =
+    | { kind: ComponentCompletionKind }
+    | { kind: 'componentKeyword' | 'context' | 'state' }
+    | { kind: 'adapterMethod'; adapterName: string }
 
 export class WordsConnection {
     private connection: Connection
@@ -60,6 +69,7 @@ export class WordsConnection {
         this.connection.onInitialize(params => this.onInitialize(params))
         this.connection.onInitialized(() => this.onInitialized())
         this.connection.onDefinition(params => this.onDefinition(params))
+        this.connection.onCompletion(params => this.onCompletion(params))
 
         this.documents.onDidSave(event => this.onDidSave(event.document))
         this.documents.onDidOpen(event => this.onDidSave(event.document))
@@ -85,6 +95,9 @@ export class WordsConnection {
             capabilities: {
                 textDocumentSync: TextDocumentSyncKind.Incremental,
                 definitionProvider: true,
+                completionProvider: {
+                    triggerCharacters: [' ', '.', '('],
+                },
             },
         }
     }
@@ -170,6 +183,160 @@ export class WordsConnection {
         }
 
         return this.resolveDefinition(word, currentFilePath)
+    }
+
+    // ── Completion ────────────────────────────────────────────────────────────
+
+    private onCompletion(params: CompletionParams): CompletionItem[] {
+        if (!this.workspace) return []
+
+        const document = this.documents.get(params.textDocument.uri)
+        if (!document) return []
+
+        const currentFilePath = uriToPath(params.textDocument.uri)
+        const currentModuleName = this.resolveCurrentModuleName(currentFilePath, document)
+        const context = this.detectCompletionContext(document, params.position)
+
+        if (!context) return []
+
+        switch (context.kind) {
+            case 'componentKeyword':
+                return this.componentUseKeywordCompletions()
+            case 'screen':
+                return this.constructCompletionItems(this.workspace.screens, currentModuleName, 'screen', CompletionItemKind.Class)
+            case 'view':
+                return this.constructCompletionItems(this.workspace.views, currentModuleName, 'view', CompletionItemKind.Class)
+            case 'provider':
+                return this.constructCompletionItems(this.workspace.providers, currentModuleName, 'provider', CompletionItemKind.Class)
+            case 'adapter':
+                return this.constructCompletionItems(this.workspace.adapters, currentModuleName, 'adapter', CompletionItemKind.Class)
+            case 'interface':
+                return this.constructCompletionItems(this.workspace.interfaces, currentModuleName, 'interface', CompletionItemKind.Interface)
+            case 'context':
+                return this.constructCompletionItems(this.workspace.contexts, currentModuleName, 'context', CompletionItemKind.Struct)
+            case 'state':
+                return this.constructCompletionItems(this.workspace.states, currentModuleName, 'state', CompletionItemKind.Class)
+            case 'adapterMethod':
+                return this.adapterMethodCompletionItems(context.adapterName, currentModuleName)
+        }
+    }
+
+    private detectCompletionContext(document: TextDocument, position: Position): WordsCompletionContext | null {
+        const linePrefix = document.getText(Range.create(Position.create(position.line, 0), position))
+
+        if (/\breceives\s+\??[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'context' }
+        if (/\breturns\s+(?:\(\s*)?[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'context' }
+        if (/\bstate\.return(?:\s+|\(\s*)[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'context' }
+        if (/\bsystem\.getContext\(\s*[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'context' }
+        if (/\bwhen\s+[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'state' }
+        if (/\benter\s+[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'state' }
+        if (/\bstart\s+[A-Za-z0-9_]*$/.test(linePrefix)) return { kind: 'state' }
+
+        const usesBlock = this.isInsideUsesBlock(document, position)
+        const adapterMethodMatch = linePrefix.match(/(?:^|[\s,(])adapter\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?)\.[A-Za-z0-9_]*$/)
+        if (adapterMethodMatch && (usesBlock || /\buses\s+/.test(linePrefix))) {
+            return { kind: 'adapterMethod', adapterName: adapterMethodMatch[1] }
+        }
+
+        const useKindMatch = linePrefix.match(/(?:^|[\s,(])(?:uses\s+)?(screen|view|provider|adapter|interface)\s+[A-Za-z0-9_.]*$/)
+        if (useKindMatch && (usesBlock || /\buses\s+/.test(linePrefix))) {
+            return { kind: useKindMatch[1] as ComponentCompletionKind }
+        }
+
+        if (/\buses\s+[A-Za-z]*$/.test(linePrefix)) return { kind: 'componentKeyword' }
+        if (usesBlock && /^\s*(?:,\s*)?[A-Za-z]*$/.test(linePrefix)) return { kind: 'componentKeyword' }
+
+        return null
+    }
+
+    private isInsideUsesBlock(document: TextDocument, position: Position): boolean {
+        const before = document.getText(Range.create(Position.create(0, 0), position))
+        const matches = [...before.matchAll(/\buses\s*\(/g)]
+        const lastMatch = matches[matches.length - 1]
+        if (!lastMatch || lastMatch.index === undefined) return false
+
+        const openParen = lastMatch.index + lastMatch[0].lastIndexOf('(')
+        let depth = 0
+        for (let i = openParen; i < before.length; i++) {
+            if (before[i] === '(') depth++
+            if (before[i] === ')') depth--
+        }
+
+        return depth > 0
+    }
+
+    private resolveCurrentModuleName(filePath: string, document: TextDocument): string | null {
+        const target = this.resolveConstructByFilePath(filePath)
+        if (target) return target.moduleName
+
+        const ownerMatch = document.getText().match(/^\s*module\s+([A-Z][A-Za-z0-9_]*)/m)
+        return ownerMatch?.[1] ?? null
+    }
+
+    private componentUseKeywordCompletions(): CompletionItem[] {
+        return [
+            { label: 'screen', kind: CompletionItemKind.Keyword, detail: 'state UI root' },
+            { label: 'view', kind: CompletionItemKind.Keyword, detail: 'rendering component' },
+            { label: 'provider', kind: CompletionItemKind.Keyword, detail: 'derived data component' },
+            { label: 'adapter', kind: CompletionItemKind.Keyword, detail: 'I/O component' },
+            { label: 'interface', kind: CompletionItemKind.Keyword, detail: 'contract component' },
+        ]
+    }
+
+    private constructCompletionItems<T extends { name: string }>(
+        moduleIndex: Map<string, Map<string, T>>,
+        currentModuleName: string | null,
+        detail: string,
+        kind: CompletionItemKind
+    ): CompletionItem[] {
+        const items: CompletionItem[] = []
+        const seen = new Set<string>()
+
+        const addItem = (moduleName: string, name: string, qualified: boolean): void => {
+            const label = qualified ? `${moduleName}.${name}` : name
+            if (seen.has(label)) return
+            seen.add(label)
+            items.push({
+                label,
+                kind,
+                detail: qualified ? `${detail} in ${moduleName}` : detail,
+                insertText: label,
+                sortText: qualified ? `1_${label}` : `0_${label}`,
+            })
+        }
+
+        if (currentModuleName) {
+            const localMap = moduleIndex.get(currentModuleName)
+            if (localMap) {
+                for (const name of localMap.keys()) addItem(currentModuleName, name, false)
+            }
+        }
+
+        for (const [moduleName, constructMap] of moduleIndex) {
+            if (moduleName === currentModuleName) continue
+            for (const name of constructMap.keys()) addItem(moduleName, name, true)
+        }
+
+        return items
+    }
+
+    private adapterMethodCompletionItems(adapterName: string, currentModuleName: string | null): CompletionItem[] {
+        if (!this.workspace) return []
+
+        const parts = adapterName.split('.')
+        const moduleName = parts.length === 1 ? currentModuleName : parts[0]
+        const name = parts[parts.length - 1]
+        if (!moduleName) return []
+
+        const adapter = this.workspace.adapters.get(moduleName)?.get(name)
+        if (!adapter) return []
+
+        return adapter.methods.map(method => ({
+            label: method.name,
+            kind: CompletionItemKind.Method,
+            detail: `method on ${name}`,
+            insertText: method.name,
+        }))
     }
 
     // ── Diagnostics ────────────────────────────────────────────────────────────

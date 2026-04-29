@@ -62,6 +62,11 @@
                     "meta.embedded.block.wds": "wds"
                 }
             }
-        ]
+        ],
+        "configurationDefaults": {
+            "[wds]": {
+                "editor.wordBasedSuggestions": "off"
+            }
+        }
     }
 }

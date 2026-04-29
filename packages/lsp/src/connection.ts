@@ -155,6 +155,13 @@ export class WordsConnection {
         if (!word) return null
 
         const currentFilePath = uriToPath(params.textDocument.uri)
+        const currentModuleName = this.resolveCurrentModuleName(currentFilePath, document)
+
+        const adapterArgLoc = this.resolveAdapterArgumentAtPosition(document, params.position, word, currentModuleName)
+        if (adapterArgLoc) return adapterArgLoc
+
+        const systemContextFieldLoc = this.resolveSystemGetContextFieldAtPosition(document, params.position, word, currentModuleName)
+        if (systemContextFieldLoc) return systemContextFieldLoc
 
         // Construct name in its own file → show constructs that consume/use it.
         const constructConsumers = this.resolveConsumersForConstructName(currentFilePath, word)
@@ -451,6 +458,9 @@ export class WordsConnection {
 
             // system.ModuleName → navigate to the module definition
             if (left === 'system') {
+                const systemMethodLoc = this.resolveSystemInterfaceMethod(right)
+                if (systemMethodLoc) return systemMethodLoc
+
                 const modulePath = this.workspace.modulePaths.get(right)
                 if (modulePath) return fileLocation(modulePath)
             }
@@ -508,6 +518,109 @@ export class WordsConnection {
 
             const byPropName = this.resolveViewPropByName(word)
             if (byPropName) return byPropName
+        }
+
+        return null
+    }
+
+    private resolveAdapterArgumentAtPosition(
+        document: TextDocument,
+        position: Position,
+        word: string,
+        currentModuleName: string | null
+    ): Location | null {
+        if (!this.workspace || !/^[a-z]/.test(word)) return null
+
+        const text = document.getText()
+        const bounds = getIdentifierBounds(text, document.offsetAt(position))
+        if (!bounds) return null
+
+        const lineEnd = text.indexOf('\n', bounds.end)
+        const afterWord = text.slice(bounds.end, lineEnd === -1 ? text.length : lineEnd)
+        if (!/^\s+is\b|^\s*is\b/.test(afterWord)) return null
+
+        const adapterUseName = getEnclosingAdapterUseName(text, bounds.start)
+        if (!adapterUseName) return null
+
+        return this.resolveAdapterMethodParam(adapterUseName, word, currentModuleName)
+    }
+
+    private resolveSystemGetContextFieldAtPosition(
+        document: TextDocument,
+        position: Position,
+        word: string,
+        currentModuleName: string | null
+    ): Location | null {
+        if (!/^[a-z]/.test(word)) return null
+
+        const text = document.getText()
+        const bounds = getIdentifierBounds(text, document.offsetAt(position))
+        if (!bounds) return null
+
+        const prefix = text.slice(0, bounds.start)
+        const match = prefix.match(/\bsystem\.getContext\s*\(\s*([A-Z][A-Za-z0-9_]*)\s*\)\.\s*$/)
+        if (!match) return null
+
+        return this.resolveContextField(match[1], word, currentModuleName)
+    }
+
+    private resolveAdapterMethodParam(
+        adapterUseName: string,
+        paramName: string,
+        currentModuleName: string | null
+    ): Location | null {
+        if (!this.workspace) return null
+
+        const resolved = resolveAdapterUseName(adapterUseName, currentModuleName)
+        if (!resolved) return null
+
+        const candidates = resolved.moduleName
+            ? [[resolved.moduleName, this.workspace.adapters.get(resolved.moduleName)] as const]
+            : [...this.workspace.adapters.entries()]
+
+        for (const [moduleName, adapterMap] of candidates) {
+            const adapter = adapterMap?.get(resolved.adapterName)
+            if (!adapter) continue
+
+            const method = adapter.methods.find(m => m.name === resolved.methodName)
+            const param = method?.params.find(p => p.name === paramName)
+            if (!param) continue
+
+            const filePath = this.workspace.constructPaths.get(`${moduleName}/${resolved.adapterName}`)
+            if (filePath) return tokenLocation(filePath, param.token)
+        }
+
+        return null
+    }
+
+    private resolveSystemInterfaceMethod(methodName: string): Location | null {
+        if (!this.workspace?.system || !this.workspace.systemFilePath) return null
+
+        const method = this.workspace.system.interfaceMethods.find(m => m.name === methodName)
+        return method ? tokenLocation(this.workspace.systemFilePath, method.token) : null
+    }
+
+    private resolveContextField(
+        contextTypeName: string,
+        fieldName: string,
+        currentModuleName: string | null
+    ): Location | null {
+        if (!this.workspace) return null
+
+        const ordered = [
+            ...(currentModuleName ? [[currentModuleName, this.workspace.contexts.get(currentModuleName)] as const] : []),
+            ...[...this.workspace.contexts.entries()].filter(([moduleName]) => moduleName !== currentModuleName),
+        ]
+
+        for (const [moduleName, contextMap] of ordered) {
+            const contextNode = contextMap?.get(contextTypeName)
+            if (!contextNode) continue
+
+            const field = contextNode.fields.find(f => f.name === fieldName)
+            if (!field) continue
+
+            const filePath = this.workspace.constructPaths.get(`${moduleName}/${contextTypeName}`)
+            if (filePath) return tokenLocation(filePath, field.token)
         }
 
         return null
@@ -972,6 +1085,63 @@ function fileLocation(filePath: string): Location {
  */
 function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_]/.test(ch)
+}
+
+function getIdentifierBounds(text: string, offset: number): { start: number; end: number } | null {
+    if (offset < 0 || offset > text.length) return null
+
+    let start = offset
+    while (start > 0 && isIdentChar(text[start - 1])) start--
+
+    let end = offset
+    while (end < text.length && isIdentChar(text[end])) end++
+
+    return start === end ? null : { start, end }
+}
+
+function getEnclosingAdapterUseName(text: string, offset: number): string | null {
+    const before = text.slice(0, offset)
+    const pattern = /\badapter\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\s*\(/g
+    let candidate: { name: string; openParen: number } | null = null
+    let match: RegExpExecArray | null
+
+    while ((match = pattern.exec(before)) !== null) {
+        candidate = {
+            name: match[1],
+            openParen: match.index + match[0].lastIndexOf('('),
+        }
+    }
+
+    if (!candidate) return null
+
+    let depth = 0
+    for (let i = candidate.openParen; i < offset; i++) {
+        if (text[i] === '(') depth++
+        if (text[i] === ')') depth--
+    }
+
+    return depth > 0 ? candidate.name : null
+}
+
+function resolveAdapterUseName(
+    adapterUseName: string,
+    currentModuleName: string | null
+): { moduleName: string | null; adapterName: string; methodName: string } | null {
+    const parts = adapterUseName.split('.')
+
+    if (parts[0] === 'system' && parts.length >= 4) {
+        return { moduleName: parts[1], adapterName: parts[2], methodName: parts[3] }
+    }
+
+    if (parts.length >= 3) {
+        return { moduleName: parts[0], adapterName: parts[1], methodName: parts[2] }
+    }
+
+    if (parts.length === 2) {
+        return { moduleName: currentModuleName, adapterName: parts[0], methodName: parts[1] }
+    }
+
+    return null
 }
 
 function isUseEntryLike(value: unknown): value is {

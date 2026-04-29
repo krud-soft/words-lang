@@ -132,7 +132,7 @@ export class WordsConnection {
      * the target file and find the exact token position of the construct
      * declaration.
      */
-    private onDefinition(params: DefinitionParams): Location | null {
+    private onDefinition(params: DefinitionParams): Location | Location[] | null {
         if (!this.workspace) return null
 
         const document = this.documents.get(params.textDocument.uri)
@@ -141,9 +141,31 @@ export class WordsConnection {
         const word = this.getWordAtPosition(document, params.position)
         if (!word) return null
 
-        // Try to resolve as a qualified name (Module.Construct or just Construct)
-        const location = this.resolveDefinition(word)
-        return location
+        const currentFilePath = uriToPath(params.textDocument.uri)
+
+        // `state` inside a component file → show all states that use this component
+        if (word === 'state') {
+            const states = this.resolveStatesUsingComponent(currentFilePath)
+            if (states.length > 0) return states
+        }
+
+        // Field name inside a props.propName(...) call → navigate to the context field
+        if (/^[a-z]/.test(word)) {
+            const propName = getPropCallPropName(document, params.position)
+            if (propName) {
+                const loc = this.resolveContextFieldInPropCall(word, propName, currentFilePath)
+                if (loc) return loc
+            }
+        }
+
+        // Method name in a module inline interface → show implementors (named interface)
+        // or callers (anonymous interface)
+        if (/^[a-z]/.test(word)) {
+            const refs = this.resolveInterfaceMethodReferences(word)
+            if (refs && refs.length > 0) return refs
+        }
+
+        return this.resolveDefinition(word, currentFilePath)
     }
 
     // ── Diagnostics ────────────────────────────────────────────────────────────
@@ -243,15 +265,46 @@ export class WordsConnection {
      *   - `ConstructName`     — searches all modules for a matching construct
      *   - `ModuleName`        — returns the module definition file
      */
-    private resolveDefinition(word: string): Location | null {
+    private resolveDefinition(word: string, currentFilePath?: string): Location | null {
         if (!this.workspace) return null
+
+        // Bare `system` keyword → navigate to the system definition file
+        if (word === 'system' && this.workspace.systemFilePath) {
+            return fileLocation(this.workspace.systemFilePath)
+        }
 
         const dotIndex = word.indexOf('.')
         if (dotIndex !== -1) {
-            // Qualified name: Module.Construct
-            const moduleName = word.slice(0, dotIndex)
-            const constructName = word.slice(dotIndex + 1)
-            const key = `${moduleName}/${constructName}`
+            const left = word.slice(0, dotIndex)
+            const right = word.slice(dotIndex + 1)
+
+            // system.ModuleName → navigate to the module definition
+            if (left === 'system') {
+                const modulePath = this.workspace.modulePaths.get(right)
+                if (modulePath) return fileLocation(modulePath)
+            }
+
+            // props.propName → navigate to the prop declaration on the enclosing component.
+            // Search the current file first so self-referential props resolve locally.
+            if (left === 'props') {
+                if (currentFilePath) {
+                    const local = this.resolveViewPropByName(right, currentFilePath)
+                    if (local) return local
+                }
+                const byPropName = this.resolveViewPropByName(right)
+                if (byPropName) return byPropName
+            }
+
+            // AdapterName.methodName → navigate to the method on the adapter
+            const adapterMethodLoc = this.resolveAdapterMethod(left, right)
+            if (adapterMethodLoc) return adapterMethodLoc
+
+            // ModuleName.methodName → search module inline interfaces for that method
+            const methodLoc = this.resolveModuleMethod(left, right)
+            if (methodLoc) return methodLoc
+
+            // ModuleName.Construct → construct in that module
+            const key = `${left}/${right}`
             const filePath = this.workspace.constructPaths.get(key)
             if (filePath) return fileLocation(filePath)
         }
@@ -264,6 +317,348 @@ export class WordsConnection {
         for (const [key, filePath] of this.workspace.constructPaths) {
             if (key.split('/')[1] === word) {
                 return fileLocation(filePath)
+            }
+        }
+
+        // Try as a camelCase name. Resolution order matters — more specific wins:
+        //   1. Method names on module inline interfaces (e.g. `switch`, `subscribeRoute`)
+        //   2. Method parameters on module inline interfaces (e.g. `path` in `switch path(string)`)
+        //   3. Handler argument names on component props (e.g. `backToDashboard`)
+        //   4. Prop names on component props (e.g. `onSubmit`)
+        if (/^[a-z]/.test(word)) {
+            const byMethodName = this.resolveModuleMethodByName(word)
+            if (byMethodName) return byMethodName
+
+            const byMethodParam = this.resolveModuleMethodParam(word)
+            if (byMethodParam) return byMethodParam
+
+            const byArgName = this.resolveHandlerArg(word)
+            if (byArgName) return byArgName
+
+            const byPropName = this.resolveViewPropByName(word)
+            if (byPropName) return byPropName
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all module inline interfaces for a method by name.
+     * Used when the cursor is on a bare method name like `switch`.
+     */
+    private resolveModuleMethodByName(methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, moduleNode] of this.workspace.modules) {
+            const modulePath = this.workspace.modulePaths.get(moduleName)
+            if (!modulePath) continue
+
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    if (method.name === methodName) {
+                        return tokenLocation(modulePath, method.token)
+                    }
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Searches a module's inline interfaces for a method named `methodName`.
+     * Navigates to the method's token.
+     * Used for `ModuleName.methodName` (e.g. `RoutingModule.subscribeRoute`).
+     */
+    private resolveAdapterMethod(adapterName: string, methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, adapterMap] of this.workspace.adapters) {
+            const adapter = adapterMap.get(adapterName)
+            if (!adapter) continue
+
+            for (const method of adapter.methods) {
+                if (method.name === methodName) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${adapterName}`)
+                    if (filePath) return tokenLocation(filePath, method.token)
+                }
+            }
+        }
+
+        return null
+    }
+
+    private resolveModuleMethod(moduleName: string, methodName: string): Location | null {
+        if (!this.workspace) return null
+
+        const moduleNode = this.workspace.modules.get(moduleName)
+        if (!moduleNode) return null
+
+        const modulePath = this.workspace.modulePaths.get(moduleName)
+        if (!modulePath) return null
+
+        for (const iface of moduleNode.inlineInterfaces) {
+            for (const method of iface.methods) {
+                if (method.name === methodName) {
+                    return tokenLocation(modulePath, method.token)
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all module inline interface methods for a parameter named `paramName`.
+     * Navigates to the param's token.
+     * Used when the cursor is on e.g. `path` in `subscribeRoute path is "..."`.
+     */
+    private resolveModuleMethodParam(paramName: string): Location | null {
+        if (!this.workspace) return null
+
+        for (const [moduleName, moduleNode] of this.workspace.modules) {
+            const modulePath = this.workspace.modulePaths.get(moduleName)
+            if (!modulePath) continue
+
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    for (const param of method.params) {
+                        if (param.name === paramName) {
+                            return tokenLocation(modulePath, param.token)
+                        }
+                    }
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Resolves a field name inside a `props.propName(...)` call to the matching
+     * field on the context type declared by that prop.
+     *
+     * Steps:
+     *   1. Find the key (`moduleName/componentName`) for `currentFilePath`.
+     *   2. Look up the component's props and find the one named `propName`.
+     *   3. Get the prop's arg type (e.g. `NewCaseData`).
+     *   4. Search workspace contexts for that type and return the field's location.
+     */
+    private resolveContextFieldInPropCall(
+        fieldName: string,
+        propName: string,
+        currentFilePath: string
+    ): Location | null {
+        if (!this.workspace) return null
+
+        // Reverse-look up the module/component key for this file
+        let fileKey: string | null = null
+        for (const [key, fp] of this.workspace.constructPaths) {
+            if (fp === currentFilePath) { fileKey = key; break }
+        }
+        if (!fileKey) return null
+
+        const [ownerModule, componentName] = fileKey.split('/')
+
+        // Find the prop's arg type by searching views, screens, and providers
+        const componentMaps = [
+            this.workspace.views,
+            this.workspace.screens,
+            this.workspace.providers,
+        ]
+        let contextTypeName: string | null = null
+        for (const moduleIndex of componentMaps) {
+            const component = (moduleIndex as any).get(ownerModule)?.get(componentName)
+            if (!component) continue
+            const props: any[] = component.props ?? []
+            const prop = props.find((p: any) => p.name === propName)
+            if (prop?.type?.kind === 'NamedType') {
+                contextTypeName = prop.type.name
+                break
+            }
+        }
+        if (!contextTypeName) return null
+
+        // Search contexts — own module first, then all others
+        const ordered = [
+            [ownerModule, this.workspace.contexts.get(ownerModule)] as const,
+            ...[...this.workspace.contexts.entries()].filter(([m]) => m !== ownerModule),
+        ]
+        for (const [moduleName, contextMap] of ordered) {
+            if (!contextMap) continue
+            const ctx = contextMap.get(contextTypeName)
+            if (!ctx) continue
+            const field = ctx.fields.find((f: any) => f.name === fieldName)
+            if (!field) continue
+            const ctxFilePath = this.workspace.constructPaths.get(`${moduleName}/${contextTypeName}`)
+            if (ctxFilePath) return tokenLocation(ctxFilePath, field.token)
+        }
+
+        return null
+    }
+
+    /**
+     * Searches all components with props (views, providers, adapters, interfaces)
+     * for a prop whose `name` matches — navigates to the prop token.
+     */
+    private resolveViewPropByName(propName: string, inFilePath?: string): Location | null {
+        return this.searchComponentProps((prop, filePath) => {
+            if (inFilePath && filePath !== inFilePath) return null
+            return prop.name === propName ? tokenLocation(filePath, prop.token) : null
+        })
+    }
+
+    /**
+     * Searches all components with props for a prop whose `argName` matches —
+     * navigates to the argName token specifically.
+     */
+    private resolveHandlerArg(argName: string): Location | null {
+        return this.searchComponentProps((prop, filePath) =>
+            prop.argName === argName && prop.argNameToken
+                ? tokenLocation(filePath, prop.argNameToken!)
+                : null
+        )
+    }
+
+    /**
+     * Iterates props across views, providers, adapters, and interfaces.
+     * Calls `predicate` for each prop; returns the first non-null result.
+     */
+    private searchComponentProps(
+        predicate: (prop: { name: string; argName: string | null; argNameToken: { line: number; column: number; value: string } | null; token: { line: number; column: number; value: string } }, filePath: string) => Location | null
+    ): Location | null {
+        if (!this.workspace) return null
+
+        const componentMaps = [
+            this.workspace.views,
+            this.workspace.providers,
+            this.workspace.adapters,
+            this.workspace.interfaces,
+        ]
+
+        for (const moduleIndex of componentMaps) {
+            for (const [moduleName, componentMap] of moduleIndex) {
+                for (const [componentName, componentNode] of componentMap) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${componentName}`)
+                    if (!filePath) continue
+                    for (const prop of (componentNode as any).props as any[]) {
+                        const result = predicate(prop, filePath)
+                        if (result) return result
+                    }
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Given a component file path, finds all states that `uses` that component
+     * (by screen, view, adapter, provider, or interface name) and returns one
+     * Location per state, pointing to the state's token.
+     */
+    private resolveStatesUsingComponent(componentFilePath: string): Location[] {
+        if (!this.workspace) return []
+
+        // Reverse-look up: which module/name owns this file path?
+        let componentName: string | null = null
+        for (const [key, fp] of this.workspace.constructPaths) {
+            if (fp === componentFilePath) {
+                componentName = key.split('/')[1]
+                break
+            }
+        }
+        if (!componentName) return []
+
+        const locations: Location[] = []
+
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, stateNode] of stateMap) {
+                if (this.stateUsesComponent(stateNode, componentName)) {
+                    const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                    if (filePath) locations.push(tokenLocation(filePath, stateNode.token))
+                }
+            }
+        }
+
+        return locations
+    }
+
+    /**
+     * Returns true if any entry in the state's `uses` tree references `componentName`.
+     */
+    private stateUsesComponent(stateNode: { uses: any[] }, componentName: string): boolean {
+        const checkEntries = (entries: any[]): boolean => {
+            for (const entry of entries) {
+                if (entry.kind === 'ComponentUse') {
+                    const parts: string[] = entry.name.parts
+                    if (parts[parts.length - 1] === componentName) return true
+                    if (checkEntries(entry.uses)) return true
+                } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                    if (checkEntries(entry.body)) return true
+                }
+            }
+            return false
+        }
+        return checkEntries(stateNode.uses)
+    }
+
+    /**
+     * Given a method name, searches all module inline interfaces to determine
+     * whether it belongs to a named (handler) interface or an anonymous one,
+     * then returns the appropriate references:
+     *
+     *   - Named interface (e.g. `RouteSwitchHandler.switch`): returns all modules
+     *     that have an `implements` block referencing that handler interface.
+     *
+     *   - Anonymous interface method (e.g. `subscribeRoute`): returns all modules
+     *     that have a subscription call whose callee ends with that method name.
+     *
+     * Returns null if the method name is not found in any inline interface.
+     */
+    private resolveInterfaceMethodReferences(methodName: string): Location[] | null {
+        if (!this.workspace) return null
+
+        for (const [ownerModuleName, moduleNode] of this.workspace.modules) {
+            for (const iface of moduleNode.inlineInterfaces) {
+                for (const method of iface.methods) {
+                    if (method.name !== methodName) continue
+
+                    const ownerPath = this.workspace.modulePaths.get(ownerModuleName)
+                    if (!ownerPath) return null
+
+                    if (iface.name) {
+                        // Named handler interface — find all modules that implement it
+                        const qualifiedName = `${ownerModuleName}.${iface.name}`
+                        const locations: Location[] = []
+                        for (const [moduleName, mod] of this.workspace.modules) {
+                            for (const impl of mod.implements) {
+                                const implName = impl.interfaceName.parts.join('.')
+                                if (implName === qualifiedName) {
+                                    const filePath = this.workspace.modulePaths.get(moduleName)
+                                    if (filePath) locations.push(tokenLocation(filePath, impl.token))
+                                }
+                            }
+                        }
+                        return locations
+                    } else {
+                        // Anonymous interface — find all modules with a matching subscription call
+                        const locations: Location[] = []
+                        for (const [moduleName, mod] of this.workspace.modules) {
+                            for (const sub of mod.subscriptions) {
+                                const callee = sub.callee
+                                const parts: string[] = callee.kind === 'QualifiedName'
+                                    ? callee.parts
+                                    : (callee as any).path ?? []
+                                if (parts[parts.length - 1] === methodName) {
+                                    const filePath = this.workspace.modulePaths.get(moduleName)
+                                    if (filePath) locations.push(tokenLocation(filePath, sub.token))
+                                }
+                            }
+                        }
+                        return locations
+                    }
+                }
             }
         }
 
@@ -298,6 +693,22 @@ function pathToUri(filePath: string): string {
 }
 
 /**
+ * Returns an LSP Location pointing to the exact position of a token.
+ * Token line and column are 1-based; LSP positions are 0-based.
+ */
+function tokenLocation(filePath: string, token: { line: number; column: number; value: string }): Location {
+    const line = token.line - 1
+    const char = token.column - 1
+    return {
+        uri: pathToUri(filePath),
+        range: Range.create(
+            Position.create(line, char),
+            Position.create(line, char + token.value.length)
+        ),
+    }
+}
+
+/**
  * Returns an LSP Location pointing to the start of a file.
  * Used when the exact token position within the file is not yet resolved.
  */
@@ -313,6 +724,49 @@ function fileLocation(filePath: string): Location {
  */
 function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_]/.test(ch)
+}
+
+/**
+ * Scans backward from `position` in `document` to determine whether the cursor
+ * sits inside a `props.propName( ... )` argument list. Returns the prop name
+ * (e.g. `onSubmit`) if so, null otherwise.
+ *
+ * Strategy: walk backward tracking paren depth. When depth reaches 0 we found
+ * the matching `(`. Then check that it is immediately preceded by `props.ident`.
+ */
+function getPropCallPropName(document: TextDocument, position: Position): string | null {
+    const text = document.getText()
+    const offset = document.offsetAt(position)
+
+    let depth = 0
+    let i = offset - 1
+    while (i >= 0) {
+        const ch = text[i]
+        if (ch === ')') { depth++; i--; continue }
+        if (ch === '(') {
+            if (depth > 0) { depth--; i--; continue }
+            // depth === 0 — this is our enclosing '('
+            // Walk back past whitespace to find the identifier before it
+            let j = i - 1
+            while (j >= 0 && /[ \t]/.test(text[j])) j--
+            // Read the identifier (propName)
+            const nameEnd = j + 1
+            while (j >= 0 && isIdentChar(text[j])) j--
+            const propName = text.slice(j + 1, nameEnd)
+            if (!propName) return null
+            // Expect a '.' before propName
+            if (j < 0 || text[j] !== '.') return null
+            j--
+            // Read the token before '.'
+            const prefixEnd = j + 1
+            while (j >= 0 && isIdentChar(text[j])) j--
+            const prefix = text.slice(j + 1, prefixEnd)
+            if (prefix === 'props') return propName
+            return null
+        }
+        i--
+    }
+    return null
 }
 
 /**

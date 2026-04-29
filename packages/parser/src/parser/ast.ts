@@ -30,6 +30,7 @@ export type PrimitiveType = 'string' | 'integer' | 'float' | 'boolean' | 'contex
 export interface PrimitiveTypeNode extends BaseNode {
     kind: 'PrimitiveType'
     name: PrimitiveType
+    optional: boolean
 }
 
 /**
@@ -128,6 +129,7 @@ export interface PropNode extends BaseNode {
     optional: boolean
     defaultValue: LiteralNode | null
     argName: string | null
+    argNameToken: Token | null
 }
 
 // ── Literals ──────────────────────────────────────────────────────────────────
@@ -222,6 +224,7 @@ export interface MethodNode extends BaseNode {
 export interface SimpleReturnsNode extends BaseNode {
     kind: 'SimpleReturns'
     contexts: string[]
+    contextTokens: Token[]
 }
 
 /**
@@ -398,6 +401,9 @@ export interface AssignmentStatementNode extends BaseNode {
 export interface StateReturnStatementNode extends BaseNode {
     kind: 'StateReturnStatement'
     contextName: string
+    /** The token of the argument inside `state.return(x)` — used for precise diagnostics. */
+    contextNameToken: Token
+    inlineContext: InlineContextNode | null
 }
 
 /**
@@ -492,11 +498,13 @@ export interface ComponentUseNode extends BaseNode {
  * - A direct component activation (screen, view, adapter, provider, interface)
  * - A conditional block (`if ...`)
  * - An iteration block (`for ... as ...`)
+ * - A system runtime call (`system.setContext`, `system.RoutingModule.dispatch`, …)
  */
 export type UseEntryNode =
     | ComponentUseNode
     | ConditionalBlockNode
     | IterationBlockNode
+    | CallExpressionNode
 
 // ── Process transition ────────────────────────────────────────────────────────
 
@@ -586,6 +594,45 @@ export interface ImplementsHandlerNode extends BaseNode {
     branches: ImplementsBranchNode[]
 }
 
+/**
+ * A single `enter` action inside an implements callback body.
+ * Maps a method invocation to a state transition with an optional explicit
+ * context type and inline context construction.
+ *
+ * Example:
+ *   enter Unauthenticated context is AuthError (
+ *     code is filter.doctorId,
+ *     reason is filter.sortOrder
+ *   )
+ */
+export interface ImplementsEnterActionNode extends BaseNode {
+    kind: 'ImplementsEnterAction'
+    targetState: string
+    contextType: string | null
+    inlineContext: InlineContextNode | null
+}
+
+/**
+ * A callback-style `implements` block where a single interface method is
+ * implemented directly as one or more enter actions (no if-branch dispatch).
+ *
+ * Example:
+ *   implements RecordsModule.RecordsLoadListener (
+ *     onLoaded is (
+ *       enter Unauthenticated context is AuthError (
+ *         code is filter.doctorId,
+ *         reason is filter.sortOrder
+ *       )
+ *     )
+ *   )
+ */
+export interface ImplementsCallbackNode extends BaseNode {
+    kind: 'ImplementsCallback'
+    interfaceName: QualifiedName
+    methodName: string
+    enterActions: ImplementsEnterActionNode[]
+}
+
 // ── Top-level constructs ──────────────────────────────────────────────────────
 
 /**
@@ -622,7 +669,7 @@ export interface ModuleNode extends BaseNode {
     description: string | null
     processes: ProcessNode[]
     startState: string | null
-    implements: ImplementsHandlerNode[]
+    implements: (ImplementsHandlerNode | ImplementsCallbackNode)[]
     subscriptions: CallExpressionNode[]
     inlineInterfaces: InterfaceNode[]
 }

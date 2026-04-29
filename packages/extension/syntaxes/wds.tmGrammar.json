@@ -45,6 +45,9 @@
             "include": "#pascal-case-name"
         },
         {
+            "include": "#method-name"
+        },
+        {
             "include": "#camel-case-name"
         },
         {
@@ -278,16 +281,6 @@
                     "comment": "is assignment / comparison",
                     "match": "\\bis\\b",
                     "name": "keyword.operator.assignment.wds"
-                },
-                {
-                    "comment": "switch handler keyword",
-                    "match": "\\b(switch)\\b",
-                    "name": "keyword.control.switch.wds"
-                },
-                {
-                    "comment": "onLoad callback keyword",
-                    "match": "\\b(onLoad)\\b",
-                    "name": "keyword.other.onload.wds"
                 }
             ]
         },
@@ -393,8 +386,13 @@
             "match": "\\b[A-Z][A-Za-z0-9]+\\b",
             "name": "entity.name.type.wds"
         },
+        "method-name": {
+            "comment": "camelCase method/handler names in declaration position — followed by '(' or a param or 'returns('",
+            "match": "\\b([a-z][A-Za-z0-9]*)\\b(?=\\s*\\(|\\s+[a-z][A-Za-z0-9]*\\s*\\(|\\s+returns\\s*\\()",
+            "name": "entity.name.function.wds"
+        },
         "camel-case-name": {
-            "comment": "camelCase identifiers — prop names, method names, variable names",
+            "comment": "camelCase identifiers — prop names, argument names, variable names",
             "match": "\\b[a-z][A-Za-z0-9]+\\b",
             "name": "variable.other.wds"
         },

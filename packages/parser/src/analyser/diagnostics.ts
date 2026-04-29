@@ -91,6 +91,12 @@ export enum DiagnosticCode {
     /** An `is` keyword was expected in an argument assignment but not found. */
     P_MISSING_IS = 'P010',
 
+    /**
+     * A handler prop argument was declared with empty parentheses — the type
+     * is missing. e.g. `onSubmit credentials()` should be `onSubmit credentials(ContextType)`.
+     */
+    P_EMPTY_HANDLER_ARG_TYPE = 'P011',
+
     // ── Analyser errors ─────────────────────────────────────────────────────────
 
     /**
@@ -147,6 +153,32 @@ export enum DiagnosticCode {
      * in the named module.
      */
     A_UNDEFINED_INTERFACE = 'A009',
+
+    /**
+     * A `state.return(x)` call inside a prop callback references an argument
+     * name that does not match the argument declared on that handler prop,
+     * or the handler prop declares no argument at all.
+     *
+     * e.g. `onSubmit` declares `credentials(AccountCredentials)` but the screen
+     * writes `state.return(badName)` instead of `state.return(credentials)`.
+     */
+    A_INVALID_HANDLER_ARG = 'A010',
+
+    /**
+     * An argument passed to an adapter use does not match any parameter declared
+     * on that adapter method.
+     * e.g. `DoctorAdapter.getCase onLoad is (...)` where `getCase` declares no
+     * parameter named `onLoad`. Use the method's declared parameter names instead.
+     */
+    A_UNKNOWN_ADAPTER_ARG = 'A011',
+
+    /**
+     * A `props.propName(...)` call constructs a context inline but omits one or
+     * more required fields declared on that context.
+     * e.g. `props.onSubmit( photoIds is ... )` when the context also requires
+     * `title`, `description`, `bodyArea`, and `symptoms`.
+     */
+    A_MISSING_CONTEXT_FIELD = 'A012',
 
     // ── Warnings ────────────────────────────────────────────────────────────────
 

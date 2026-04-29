@@ -29,13 +29,17 @@ import {
 } from './diagnostics'
 import {
     StateNode,
-    ScreenNode,
     SimpleReturnsNode,
     ExpandedReturnsNode,
     UseEntryNode,
+    ComponentUseNode,
     BlockExpressionNode,
     StateReturnStatementNode,
-    ArgumentNode,
+    PropNode,
+    QualifiedName,
+    CallExpressionNode,
+    AccessExpressionNode,
+    ContextNode,
 } from '../parser/ast'
 
 // ── AnalysisResult ────────────────────────────────────────────────────────────
@@ -73,6 +77,8 @@ export class Analyser {
         this.checkStateReturns()
         this.checkStateReachability()
         this.checkScreenStateReturns()
+        this.checkAdapterUseArgs()
+        this.checkPropCallContextFields()
         this.checkOwnershipDeclarations()
 
         return { diagnostics: this.diagnostics }
@@ -173,15 +179,13 @@ export class Analyser {
                 const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
                 if (!filePath) continue
 
-                const returnedContexts = this.extractReturnedContexts(stateNode)
-
-                for (const contextName of returnedContexts) {
-                    if (!coveredReturns.has(`${stateName}::${contextName}`)) {
+                for (const { name, token } of this.extractReturnedContextsWithTokens(stateNode)) {
+                    if (!coveredReturns.has(`${stateName}::${name}`)) {
                         this.report(
                             filePath,
                             DiagnosticCode.A_UNHANDLED_RETURN,
-                            `Context '${contextName}' is listed in state '${stateName}' returns but has no corresponding when rule in module '${moduleName}'`,
-                            stateNode.token
+                            `State '${stateName}' returns context '${name}' without a corresponding when rule in module '${moduleName}'`,
+                            token
                         )
                     }
                 }
@@ -215,10 +219,16 @@ export class Analyser {
                 }
             }
 
-            // Also collect all states referenced in implements branches
+            // Also collect all states referenced in implements blocks
             for (const impl of moduleNode.implements) {
-                for (const branch of impl.branches) {
-                    reachable.add(branch.targetState)
+                if (impl.kind === 'ImplementsHandler') {
+                    for (const branch of impl.branches) {
+                        reachable.add(branch.targetState)
+                    }
+                } else {
+                    for (const action of impl.enterActions) {
+                        reachable.add(action.targetState)
+                    }
                 }
             }
 
@@ -259,7 +269,7 @@ export class Analyser {
                 const validReturns = new Set(this.extractReturnedContexts(enclosingState))
 
                 // Walk the screen's uses tree and check every state.return()
-                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName)
             }
         }
     }
@@ -271,46 +281,122 @@ export class Analyser {
         uses: UseEntryNode[],
         validReturns: Set<string>,
         filePath: string,
-        screenNode: ScreenNode
+        enclosingModuleName: string
     ): void {
         for (const entry of uses) {
             if (entry.kind === 'ComponentUse') {
-                this.checkStateReturnsInArgs(entry.args, validReturns, filePath)
-                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, screenNode)
+                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName)
             } else if (entry.kind === 'ConditionalBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
             } else if (entry.kind === 'IterationBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, screenNode)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
             }
         }
     }
 
     /**
-     * Checks arguments for block expressions containing state.return() calls.
+     * For each BlockExpression arg on a component use, validates every
+     * state.return() call inside it.
+     *
+     * Two cases, determined by the target view's prop declaration for that arg:
+     *
+     *   - Prop has a named argument (e.g. `onSubmit credentials(AccountCredentials)`):
+     *       state.return(x) must use x = argName. If it doesn't → A010.
+     *       If it does, the prop's type must match a context in state's returns → A008.
+     *
+     *   - Prop has no named argument (e.g. `onPress`):
+     *       state.return(x) treats x as a direct context name → A008 if not in returns.
+     *
+     * If the target view cannot be resolved, falls back to the direct context check.
      */
     private checkStateReturnsInArgs(
-        args: ArgumentNode[],
+        componentUse: ComponentUseNode,
         validReturns: Set<string>,
-        filePath: string
+        filePath: string,
+        enclosingModuleName: string
     ): void {
-        for (const arg of args) {
-            if (arg.value.kind === 'BlockExpression') {
-                const block = arg.value as BlockExpressionNode
-                for (const stmt of block.statements) {
-                    if (stmt.kind === 'StateReturnStatement') {
-                        const returnStmt = stmt as StateReturnStatementNode
-                        if (!validReturns.has(returnStmt.contextName)) {
+        const viewProps = this.resolveViewProps(componentUse.name, enclosingModuleName)
+
+        for (const arg of componentUse.args) {
+            if (arg.value.kind !== 'BlockExpression') continue
+
+            const block = arg.value as BlockExpressionNode
+            for (const stmt of block.statements) {
+                if (stmt.kind !== 'StateReturnStatement') continue
+
+                const returnStmt = stmt as StateReturnStatementNode
+                const prop = viewProps?.find(p => p.name === arg.name) ?? null
+
+                const returnToken = returnStmt.contextNameToken ?? returnStmt.token
+                // PascalCase contextName or inline construction means a direct context type
+                // reference — validate against validReturns. camelCase inside state.return(x)
+                // is the old arg-binding form and must match the prop's argName.
+                const isDirectContextRef = /^[A-Z]/.test(returnStmt.contextName) || returnStmt.inlineContext !== null
+                if (prop?.argName && !isDirectContextRef) {
+                    // Old form: state.return(argName) — must match the prop's declared arg
+                    if (returnStmt.contextName !== prop.argName) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_HANDLER_ARG,
+                            `Handler '${arg.name}' expects argument '${prop.argName}', not '${returnStmt.contextName}'`,
+                            returnToken
+                        )
+                    } else if (
+                        prop.type?.kind === 'NamedType' &&
+                        prop.type.name !== '?' &&
+                        !validReturns.has(prop.type.name)
+                    ) {
+                        const expected = [...validReturns].join(', ') || 'none'
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_STATE_RETURN,
+                            `Arg '${prop.argName}' of type '${prop.type.name}' passed to prop '${arg.name}' does not match any context in the enclosing state's returns clause (returns: ${expected})`,
+                            returnToken
+                        )
+                    }
+                } else {
+                    // Direct context type reference (PascalCase or inline construction),
+                    // or prop has no argName — must be in the state's declared returns.
+                    if (!validReturns.has(returnStmt.contextName)) {
+                        const looksLikeArgRef = prop !== null && /^[a-z]/.test(returnStmt.contextName)
+                        if (looksLikeArgRef) {
+                            this.report(
+                                filePath,
+                                DiagnosticCode.A_INVALID_HANDLER_ARG,
+                                `Handler '${arg.name}' has no argument — '${returnStmt.contextName}' is not a declared argument`,
+                                returnToken
+                            )
+                        } else {
                             this.report(
                                 filePath,
                                 DiagnosticCode.A_INVALID_STATE_RETURN,
                                 `state.return('${returnStmt.contextName}') does not match any context in the enclosing state's returns clause`,
-                                returnStmt.token
+                                returnToken
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Resolves the props of a view component by its qualified name.
+     * Returns null if the view is not found in the workspace.
+     *
+     * For unqualified names (e.g. `DiagnosisConfirmation`), the enclosing
+     * module is used. For qualified names (e.g. `UIModule.LoginForm`), the
+     * first part is the module name.
+     */
+    private resolveViewProps(name: QualifiedName, enclosingModuleName: string): PropNode[] | null {
+        const moduleName = name.parts.length === 1 ? enclosingModuleName : name.parts[0]
+        const viewName = name.parts[name.parts.length - 1]
+
+        const viewMap = this.workspace.views.get(moduleName)
+        if (!viewMap) return null
+        const view = viewMap.get(viewName)
+        return view ? view.props : null
     }
 
     // ── Rule A007 — Ownership declarations match construct modules ─────────────
@@ -320,6 +406,196 @@ export class Analyser {
      * file must have its module field matching the ownerModule.
      * (The module field is filled in by the Workspace during indexing.)
      */
+    // ── Rule A011 — Adapter use arguments match method params ──────────────────
+
+    /**
+     * For every adapter ComponentUseNode across all component uses trees,
+     * validates that each argument name matches a parameter
+     * declared on the referenced adapter method.
+     */
+    private checkAdapterUseArgs(): void {
+        // Collect all (filePath, uses[]) pairs from every construct that has a uses block
+        const usesEntries: Array<{ filePath: string; uses: UseEntryNode[] }> = []
+
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, stateNode] of stateMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: stateNode.uses })
+            }
+        }
+        for (const [moduleName, screenMap] of this.workspace.screens) {
+            for (const [screenName, screenNode] of screenMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: screenNode.uses })
+            }
+        }
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, viewNode] of viewMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: viewNode.uses })
+            }
+        }
+        for (const [moduleName, providerMap] of this.workspace.providers) {
+            for (const [providerName, providerNode] of providerMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${providerName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: (providerNode as any).uses ?? [] })
+            }
+        }
+        for (const [moduleName, ifaceMap] of this.workspace.interfaces) {
+            for (const [ifaceName, ifaceNode] of ifaceMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${ifaceName}`)
+                if (fp) usesEntries.push({ filePath: fp, uses: ifaceNode.uses })
+            }
+        }
+
+        for (const { filePath, uses } of usesEntries) {
+            this.checkAdapterArgsInUses(uses, filePath)
+        }
+    }
+
+    private checkAdapterArgsInUses(uses: UseEntryNode[], filePath: string): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                if (entry.componentKind === 'adapter') {
+                    this.validateAdapterArgs(entry as ComponentUseNode, filePath)
+                }
+                this.checkAdapterArgsInUses(entry.uses, filePath)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkAdapterArgsInUses(entry.body, filePath)
+            }
+        }
+    }
+
+    private validateAdapterArgs(use: ComponentUseNode, filePath: string): void {
+        // Resolve adapter and method from the qualified name.
+        // Supported forms: AdapterName.methodName or system.ModuleName.AdapterName.methodName
+        const parts = use.name.parts
+        const methodName = parts[parts.length - 1]
+        const adapterName = parts[parts.length - 2]
+        if (!adapterName || !methodName) return
+
+        // Find the adapter across all modules
+        let methodParams: string[] | null = null
+        for (const [, adapterMap] of this.workspace.adapters) {
+            const adapter = adapterMap.get(adapterName)
+            if (!adapter) continue
+            const method = adapter.methods.find(m => m.name === methodName)
+            if (method) {
+                methodParams = method.params.map(p => p.name)
+                break
+            }
+        }
+        if (methodParams === null) return // adapter or method not found — skip
+
+        for (const arg of use.args) {
+            if (!methodParams.includes(arg.name)) {
+                const validList = methodParams.length > 0 ? methodParams.join(', ') : 'none'
+                this.report(
+                    filePath,
+                    DiagnosticCode.A_UNKNOWN_ADAPTER_ARG,
+                    `'${methodName}' has no argument '${arg.name}' (valid: ${validList})`,
+                    arg.token
+                )
+            }
+        }
+    }
+
+    // ── Rule A012 — props.propName(...) provides all context fields ───────────────
+
+    /**
+     * For every `props.propName( fieldName is value, ... )` call expression
+     * found in a component's uses tree, verifies that all required fields of
+     * the context type declared on that prop are provided.
+     *
+     * e.g. if `onSubmit newCaseData(NewCaseData)` is a prop and `NewCaseData`
+     * has five fields, calling `props.onSubmit( photoIds is x )` must include
+     * all five fields — missing ones are reported as A012.
+     */
+    private checkPropCallContextFields(): void {
+        const entries: Array<{ filePath: string; componentProps: PropNode[]; uses: UseEntryNode[]; moduleName: string }> = []
+
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, viewNode] of viewMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: viewNode.props, uses: viewNode.uses, moduleName })
+            }
+        }
+        for (const [moduleName, screenMap] of this.workspace.screens) {
+            for (const [screenName, screenNode] of screenMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: (screenNode as any).props ?? [], uses: screenNode.uses, moduleName })
+            }
+        }
+        for (const [moduleName, providerMap] of this.workspace.providers) {
+            for (const [providerName, providerNode] of providerMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${providerName}`)
+                if (fp) entries.push({ filePath: fp, componentProps: (providerNode as any).props ?? [], uses: (providerNode as any).uses ?? [], moduleName })
+            }
+        }
+
+        for (const { filePath, componentProps, uses, moduleName } of entries) {
+            this.checkPropCallsInUses(uses, componentProps, filePath, moduleName)
+        }
+    }
+
+    private checkPropCallsInUses(
+        uses: UseEntryNode[],
+        componentProps: PropNode[],
+        filePath: string,
+        moduleName: string
+    ): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                const use = entry as ComponentUseNode
+                for (const arg of use.args) {
+                    if (arg.value.kind !== 'CallExpression') continue
+                    const callExpr = arg.value as CallExpressionNode
+                    if (callExpr.callee.kind !== 'AccessExpression') continue
+                    const path = (callExpr.callee as AccessExpressionNode).path
+                    if (path[0] !== 'props' || path.length < 2) continue
+
+                    const propName = path[1]
+                    const prop = componentProps.find(p => p.name === propName)
+                    if (!prop || !prop.argName || !prop.type || prop.type.kind !== 'NamedType') continue
+
+                    const contextTypeName = (prop.type as any).name as string
+                    const context = this.resolveContextByName(contextTypeName, moduleName)
+                    if (!context) continue
+
+                    const providedFields = new Set(callExpr.args.map(a => a.name))
+                    const missingFields = context.fields
+                        .filter(f => !f.optional && !providedFields.has(f.name))
+                        .map(f => f.name)
+
+                    if (missingFields.length > 0) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_MISSING_CONTEXT_FIELD,
+                            `props.${propName}(...) is missing fields for '${contextTypeName}': ${missingFields.join(', ')}`,
+                            callExpr.token
+                        )
+                    }
+                }
+                this.checkPropCallsInUses(use.uses, componentProps, filePath, moduleName)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkPropCallsInUses((entry as any).body, componentProps, filePath, moduleName)
+            }
+        }
+    }
+
+    /**
+     * Resolves a context by name, searching the enclosing module first then all modules.
+     */
+    private resolveContextByName(contextName: string, enclosingModuleName: string): ContextNode | null {
+        const own = this.workspace.getContext(enclosingModuleName, contextName)
+        if (own) return own
+        for (const [, contextMap] of this.workspace.contexts) {
+            const ctx = contextMap.get(contextName)
+            if (ctx) return ctx
+        }
+        return null
+    }
+
     private checkOwnershipDeclarations(): void {
         for (const [filePath, record] of this.workspace.files) {
             const doc = record.parseResult.document
@@ -347,14 +623,30 @@ export class Analyser {
      * handling both simple and expanded forms.
      */
     private extractReturnedContexts(stateNode: StateNode): string[] {
+        return this.extractReturnedContextsWithTokens(stateNode).map(e => e.name)
+    }
+
+    /**
+     * Extracts all context names and their source tokens from a state's returns clause.
+     * For simple returns, uses the per-context token stored at parse time.
+     * For expanded returns, uses the ExpandedReturnNode's own token.
+     */
+    private extractReturnedContextsWithTokens(stateNode: StateNode): Array<{ name: string; token: { line: number; column: number; value: string } }> {
         if (!stateNode.returns) return []
 
         if (stateNode.returns.kind === 'SimpleReturns') {
-            return (stateNode.returns as SimpleReturnsNode).contexts
+            const node = stateNode.returns as SimpleReturnsNode
+            return node.contexts.map((name, i) => ({
+                name,
+                token: node.contextTokens[i] ?? node.token,
+            }))
         }
 
         if (stateNode.returns.kind === 'ExpandedReturns') {
-            return (stateNode.returns as ExpandedReturnsNode).entries.map(e => e.contextName)
+            return (stateNode.returns as ExpandedReturnsNode).entries.map(e => ({
+                name: e.contextName,
+                token: e.token,
+            }))
         }
 
         return []

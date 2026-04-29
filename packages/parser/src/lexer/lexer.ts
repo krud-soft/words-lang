@@ -70,6 +70,7 @@ const KEYWORDS: Record<string, TokenType> = {
     receives: TokenType.Receives,
     start: TokenType.Start,
     implements: TokenType.Implements,
+    includes: TokenType.Includes,
     when: TokenType.When,
     enter: TokenType.Enter,
     if: TokenType.If,

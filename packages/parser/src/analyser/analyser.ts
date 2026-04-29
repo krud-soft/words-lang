@@ -40,6 +40,9 @@ import {
     CallExpressionNode,
     AccessExpressionNode,
     ContextNode,
+    InterfaceNode,
+    TypeNode,
+    ExpressionNode,
 } from '../parser/ast'
 
 // ── AnalysisResult ────────────────────────────────────────────────────────────
@@ -73,12 +76,19 @@ export class Analyser {
         this.diagnostics = []
 
         this.checkSystemModules()
+        this.checkImplementsInterfaces()
         this.checkProcessRules()
+        this.checkStateContextReferences()
         this.checkStateReturns()
         this.checkStateReachability()
+        this.checkComponentReferences()
         this.checkScreenStateReturns()
         this.checkAdapterUseArgs()
         this.checkPropCallContextFields()
+        this.checkInterfaceIncludes()
+        this.checkComponentRuntimeAccess()
+        this.checkStateUseConstraints()
+        this.checkComponentPropAssignments()
         this.checkOwnershipDeclarations()
 
         return { diagnostics: this.diagnostics }
@@ -102,6 +112,27 @@ export class Analyser {
                     `Module '${moduleName}' is listed in the system but has no definition`,
                     system.token
                 )
+            }
+        }
+    }
+
+    // ── Rule A009 — Implements references declared interfaces ─────────────────
+
+    private checkImplementsInterfaces(): void {
+        for (const [moduleName, moduleNode] of this.workspace.modules) {
+            const filePath = this.workspace.modulePaths.get(moduleName)
+            if (!filePath) continue
+
+            for (const impl of moduleNode.implements) {
+                const target = this.resolveInterfaceName(impl.interfaceName, moduleName)
+                if (!target) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_UNDEFINED_INTERFACE,
+                        `Interface '${impl.interfaceName.parts.join('.')}' referenced by implements is not declared`,
+                        impl.interfaceName.token
+                    )
+                }
             }
         }
     }
@@ -149,6 +180,35 @@ export class Analyser {
                             DiagnosticCode.A_UNDEFINED_CONTEXT,
                             `Context '${rule.producedContext}' referenced in process '${process.name}' is not defined in module '${moduleName}'`,
                             rule.token
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private checkStateContextReferences(): void {
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, state] of stateMap) {
+                const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                if (!filePath) continue
+
+                if (state.receives && !this.workspace.getContext(moduleName, state.receives)) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_UNDEFINED_CONTEXT,
+                        `State '${stateName}' receives context '${state.receives}' that is not defined in module '${moduleName}'`,
+                        state.token
+                    )
+                }
+
+                for (const { name, token } of this.extractReturnedContextsWithTokens(state)) {
+                    if (!this.workspace.getContext(moduleName, name)) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_UNDEFINED_CONTEXT,
+                            `State '${stateName}' returns context '${name}' that is not defined in module '${moduleName}'`,
+                            token
                         )
                     }
                 }
@@ -262,14 +322,12 @@ export class Analyser {
                 const filePath = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
                 if (!filePath) continue
 
-                // Find the state that uses this screen
-                const enclosingState = this.findStateUsingScreen(moduleName, screenName)
-                if (!enclosingState) continue
-
-                const validReturns = new Set(this.extractReturnedContexts(enclosingState))
-
-                // Walk the screen's uses tree and check every state.return()
-                this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName)
+                // A screen can be mounted by more than one state. Validate its
+                // state.return() calls against each mounting state's returns.
+                for (const enclosingState of this.findStatesUsingScreen(moduleName, screenName)) {
+                    const validReturns = new Set(this.extractReturnedContexts(enclosingState))
+                    this.checkStateReturnsInUses(screenNode.uses, validReturns, filePath, moduleName, enclosingState)
+                }
             }
         }
     }
@@ -281,16 +339,17 @@ export class Analyser {
         uses: UseEntryNode[],
         validReturns: Set<string>,
         filePath: string,
-        enclosingModuleName: string
+        enclosingModuleName: string,
+        enclosingState: StateNode
     ): void {
         for (const entry of uses) {
             if (entry.kind === 'ComponentUse') {
-                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName)
-                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInArgs(entry, validReturns, filePath, enclosingModuleName, enclosingState)
+                this.checkStateReturnsInUses(entry.uses, validReturns, filePath, enclosingModuleName, enclosingState)
             } else if (entry.kind === 'ConditionalBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName, enclosingState)
             } else if (entry.kind === 'IterationBlock') {
-                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName)
+                this.checkStateReturnsInUses(entry.body, validReturns, filePath, enclosingModuleName, enclosingState)
             }
         }
     }
@@ -314,7 +373,8 @@ export class Analyser {
         componentUse: ComponentUseNode,
         validReturns: Set<string>,
         filePath: string,
-        enclosingModuleName: string
+        enclosingModuleName: string,
+        enclosingState: StateNode
     ): void {
         const viewProps = this.resolveViewProps(componentUse.name, enclosingModuleName)
 
@@ -347,11 +407,14 @@ export class Analyser {
                         prop.type.name !== '?' &&
                         !validReturns.has(prop.type.name)
                     ) {
-                        const expected = [...validReturns].join(', ') || 'none'
                         this.report(
                             filePath,
                             DiagnosticCode.A_INVALID_STATE_RETURN,
-                            `Arg '${prop.argName}' of type '${prop.type.name}' passed to prop '${arg.name}' does not match any context in the enclosing state's returns clause (returns: ${expected})`,
+                            this.describeInvalidReturnForState(
+                                enclosingState,
+                                prop.type.name,
+                                `Arg '${prop.argName}' passed to prop '${arg.name}' produces '${prop.type.name}'`
+                            ),
                             returnToken
                         )
                     }
@@ -371,7 +434,11 @@ export class Analyser {
                             this.report(
                                 filePath,
                                 DiagnosticCode.A_INVALID_STATE_RETURN,
-                                `state.return('${returnStmt.contextName}') does not match any context in the enclosing state's returns clause`,
+                                this.describeInvalidReturnForState(
+                                    enclosingState,
+                                    returnStmt.contextName,
+                                    `state.return('${returnStmt.contextName}')`
+                                ),
                                 returnToken
                             )
                         }
@@ -500,6 +567,98 @@ export class Analyser {
         }
     }
 
+    // ── Rule A006 — Component references resolve ──────────────────────────────
+
+    private checkComponentReferences(): void {
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, state] of stateMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                if (fp) this.checkComponentReferencesInUses(state.uses, moduleName, fp)
+            }
+        }
+        for (const [moduleName, screenMap] of this.workspace.screens) {
+            for (const [screenName, screen] of screenMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${screenName}`)
+                if (fp) this.checkComponentReferencesInUses(screen.uses, moduleName, fp)
+            }
+        }
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, view] of viewMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (fp) this.checkComponentReferencesInUses(view.uses, moduleName, fp)
+            }
+        }
+        for (const [moduleName, ifaceMap] of this.workspace.interfaces) {
+            for (const [ifaceName, iface] of ifaceMap) {
+                const fp = this.workspace.constructPaths.get(`${moduleName}/${ifaceName}`)
+                if (fp) this.checkComponentReferencesInUses(iface.uses, moduleName, fp)
+            }
+        }
+    }
+
+    private checkComponentReferencesInUses(
+        uses: UseEntryNode[],
+        enclosingModuleName: string,
+        filePath: string
+    ): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                if (!this.componentUseResolves(entry, enclosingModuleName)) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_UNDEFINED_COMPONENT,
+                        `Component '${entry.name.parts.join('.')}' cannot be resolved`,
+                        entry.token
+                    )
+                }
+                this.checkComponentReferencesInUses(entry.uses, enclosingModuleName, filePath)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkComponentReferencesInUses(entry.body, enclosingModuleName, filePath)
+            }
+        }
+    }
+
+    private componentUseResolves(use: ComponentUseNode, enclosingModuleName: string): boolean {
+        const resolved = this.resolveComponentName(use, enclosingModuleName)
+        if (!resolved) return false
+
+        switch (use.componentKind) {
+            case 'screen':
+                return this.workspace.screens.get(resolved.moduleName)?.has(resolved.componentName) ?? false
+            case 'view':
+                return this.workspace.views.get(resolved.moduleName)?.has(resolved.componentName) ?? false
+            case 'adapter':
+                return this.workspace.adapters.get(resolved.moduleName)?.has(resolved.componentName) ?? false
+            case 'provider':
+                return this.workspace.providers.get(resolved.moduleName)?.has(resolved.componentName) ?? false
+            case 'interface':
+                return this.workspace.interfaces.get(resolved.moduleName)?.has(resolved.componentName) ?? false
+        }
+    }
+
+    private resolveComponentName(
+        use: ComponentUseNode,
+        enclosingModuleName: string
+    ): { moduleName: string; componentName: string } | null {
+        const parts = use.name.parts
+        if (parts.length === 0) return null
+
+        if (parts[0] === 'system') {
+            if (parts.length < 3) return null
+            return { moduleName: parts[1], componentName: parts[2] }
+        }
+
+        if (parts.length === 1) {
+            return { moduleName: enclosingModuleName, componentName: parts[0] }
+        }
+
+        if (use.componentKind === 'adapter' && parts.length === 2) {
+            return { moduleName: enclosingModuleName, componentName: parts[0] }
+        }
+
+        return { moduleName: parts[0], componentName: parts[1] }
+    }
+
     // ── Rule A012 — props.propName(...) provides all context fields ───────────────
 
     /**
@@ -596,6 +755,207 @@ export class Analyser {
         return null
     }
 
+    // ── Rules A013-A016 — Interface includes semantics ────────────────────────
+
+    private checkInterfaceIncludes(): void {
+        for (const [moduleName, ifaceMap] of this.workspace.interfaces) {
+            for (const [ifaceName, iface] of ifaceMap) {
+                const filePath = this.workspace.constructPaths.get(`${moduleName}/${ifaceName}`)
+                if (!filePath) continue
+
+                if (iface.includes.length > 0 && !this.isDataInterface(iface)) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_INVALID_INTERFACE_INCLUDE,
+                        `Interface '${ifaceName}' cannot include other interfaces because it declares behavior`,
+                        iface.token
+                    )
+                }
+
+                for (const includeName of iface.includes) {
+                    const included = this.resolveInterfaceName(includeName, moduleName)
+                    if (!included) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_UNDEFINED_INCLUDED_INTERFACE,
+                            `Included interface '${includeName.parts.join('.')}' cannot be resolved`,
+                            includeName.token
+                        )
+                        continue
+                    }
+
+                    if (!this.isDataInterface(included.node)) {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_INTERFACE_INCLUDE,
+                            `Interface '${ifaceName}' cannot include behavioral interface '${included.name}'`,
+                            includeName.token
+                        )
+                    }
+                }
+
+                if (this.hasIncludesCycle(moduleName, ifaceName)) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_CYCLIC_INTERFACE_INCLUDE,
+                        `Interface '${ifaceName}' has a cyclic includes relationship`,
+                        iface.token
+                    )
+                }
+
+                const duplicate = this.findIncompatibleIncludedProp(moduleName, ifaceName)
+                if (duplicate) {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_DUPLICATE_INTERFACE_PROP,
+                        `Included interfaces declare prop '${duplicate}' with incompatible types`,
+                        iface.token
+                    )
+                }
+            }
+        }
+    }
+
+    // ── Rules A017-A018 — Component layer access/use constraints ──────────────
+
+    private checkComponentRuntimeAccess(): void {
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, view] of viewMap) {
+                const filePath = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (!filePath) continue
+                this.checkInvalidRuntimeAccessInUses(view.uses, filePath, 'view')
+            }
+        }
+    }
+
+    private checkInvalidRuntimeAccessInUses(
+        uses: UseEntryNode[],
+        filePath: string,
+        componentKind: 'view'
+    ): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                for (const arg of entry.args) {
+                    this.checkInvalidRuntimeAccessInExpression(arg.value, filePath, componentKind)
+                }
+                this.checkInvalidRuntimeAccessInUses(entry.uses, filePath, componentKind)
+            } else if (entry.kind === 'ConditionalBlock') {
+                this.checkInvalidRuntimeAccessInExpression(entry.condition.left, filePath, componentKind)
+                this.checkInvalidRuntimeAccessInExpression(entry.condition.right, filePath, componentKind)
+                this.checkInvalidRuntimeAccessInUses(entry.body, filePath, componentKind)
+            } else if (entry.kind === 'IterationBlock') {
+                this.checkInvalidRuntimeAccessInExpression(entry.collection, filePath, componentKind)
+                this.checkInvalidRuntimeAccessInUses(entry.body, filePath, componentKind)
+            } else if (entry.kind === 'CallExpression') {
+                for (const arg of entry.args) {
+                    this.checkInvalidRuntimeAccessInExpression(arg.value, filePath, componentKind)
+                }
+            }
+        }
+    }
+
+    private checkInvalidRuntimeAccessInExpression(
+        expression: ExpressionNode,
+        filePath: string,
+        componentKind: 'view'
+    ): void {
+        if (expression.kind === 'AccessExpression') {
+            const access = expression as AccessExpressionNode
+            if (componentKind === 'view' && access.path[0] === 'context') {
+                this.report(
+                    filePath,
+                    DiagnosticCode.A_INVALID_RUNTIME_ACCESS,
+                    `Views cannot read '${access.path.join('.')}' directly; pass data through props`,
+                    access.token
+                )
+            }
+        } else if (expression.kind === 'CallExpression') {
+            const call = expression as CallExpressionNode
+            for (const arg of call.args) {
+                this.checkInvalidRuntimeAccessInExpression(arg.value, filePath, componentKind)
+            }
+        } else if (expression.kind === 'BlockExpression') {
+            const block = expression as BlockExpressionNode
+            for (const stmt of block.statements) {
+                if (stmt.kind === 'StateReturnStatement' && componentKind === 'view') {
+                    this.report(
+                        filePath,
+                        DiagnosticCode.A_INVALID_RUNTIME_ACCESS,
+                        `Views cannot call state.return directly; expose a callback prop instead`,
+                        stmt.token
+                    )
+                } else if (stmt.kind === 'AssignmentStatement') {
+                    this.checkInvalidRuntimeAccessInExpression(stmt.value, filePath, componentKind)
+                }
+            }
+        }
+    }
+
+    private checkStateUseConstraints(): void {
+        for (const [moduleName, stateMap] of this.workspace.states) {
+            for (const [stateName, state] of stateMap) {
+                const filePath = this.workspace.constructPaths.get(`${moduleName}/${stateName}`)
+                if (!filePath) continue
+                for (const entry of state.uses) {
+                    if (entry.kind === 'ComponentUse' && entry.componentKind === 'view') {
+                        this.report(
+                            filePath,
+                            DiagnosticCode.A_INVALID_STATE_USE,
+                            `State '${stateName}' cannot use view '${entry.name.parts.join('.')}' directly; use a screen as the UI root`,
+                            entry.token
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Rule A019 — Prop assignment type compatibility ────────────────────────
+
+    private checkComponentPropAssignments(): void {
+        for (const [moduleName, viewMap] of this.workspace.views) {
+            for (const [viewName, view] of viewMap) {
+                const filePath = this.workspace.constructPaths.get(`${moduleName}/${viewName}`)
+                if (!filePath) continue
+                this.checkPropAssignmentsInUses(view.uses, view.props, moduleName, filePath)
+            }
+        }
+    }
+
+    private checkPropAssignmentsInUses(
+        uses: UseEntryNode[],
+        sourceProps: PropNode[],
+        moduleName: string,
+        filePath: string
+    ): void {
+        for (const entry of uses) {
+            if (entry.kind === 'ComponentUse') {
+                const targetProps = this.resolveComponentProps(entry, moduleName)
+                if (targetProps) {
+                    for (const arg of entry.args) {
+                        const expected = targetProps.find(p => p.name === arg.name)
+                        if (!expected?.type) continue
+
+                        const actualType = this.inferExpressionTypeFromProps(arg.value, sourceProps)
+                        if (!actualType) continue
+
+                        if (!this.isAssignableType(actualType, expected.type, moduleName)) {
+                            this.report(
+                                filePath,
+                                DiagnosticCode.A_INVALID_TYPE_ASSIGNMENT,
+                                `Argument '${arg.name}' is not assignable to '${this.typeToString(expected.type)}'`,
+                                arg.token
+                            )
+                        }
+                    }
+                }
+                this.checkPropAssignmentsInUses(entry.uses, sourceProps, moduleName, filePath)
+            } else if (entry.kind === 'ConditionalBlock' || entry.kind === 'IterationBlock') {
+                this.checkPropAssignmentsInUses(entry.body, sourceProps, moduleName, filePath)
+            }
+        }
+    }
+
     private checkOwnershipDeclarations(): void {
         for (const [filePath, record] of this.workspace.files) {
             const doc = record.parseResult.document
@@ -653,12 +1013,13 @@ export class Analyser {
     }
 
     /**
-     * Finds the StateNode in `moduleName` that uses the given screen.
-     * Returns null if no state in the module uses this screen.
+     * Finds every StateNode in `moduleName` that uses the given screen.
      */
-    private findStateUsingScreen(moduleName: string, screenName: string): StateNode | null {
+    private findStatesUsingScreen(moduleName: string, screenName: string): StateNode[] {
         const stateMap = this.workspace.states.get(moduleName)
-        if (!stateMap) return null
+        if (!stateMap) return []
+
+        const states: StateNode[] = []
 
         for (const [, stateNode] of stateMap) {
             for (const entry of stateNode.uses) {
@@ -667,14 +1028,171 @@ export class Analyser {
                     entry.componentKind === 'screen' &&
                     (entry.name.parts.length === 1
                         ? entry.name.parts[0] === screenName
-                        : entry.name.parts[entry.name.parts.length - 1] === screenName)
+                        : entry.name.parts[0] === moduleName && entry.name.parts[entry.name.parts.length - 1] === screenName)
                 ) {
-                    return stateNode
+                    states.push(stateNode)
+                    break
                 }
             }
         }
 
+        return states
+    }
+
+    private describeInvalidReturnForState(stateNode: StateNode, producedContext: string, prefix: string): string {
+        const expected = this.extractReturnedContexts(stateNode).join(', ') || 'none'
+        return `${prefix}, but state '${stateNode.name}' does not return '${producedContext}' (state returns: ${expected})`
+    }
+
+    private resolveInterfaceName(
+        name: QualifiedName,
+        enclosingModuleName: string
+    ): { moduleName: string; name: string; node: InterfaceNode } | null {
+        const moduleName = name.parts.length === 1 ? enclosingModuleName : name.parts[0]
+        const ifaceName = name.parts[name.parts.length - 1]
+        const node = this.workspace.interfaces.get(moduleName)?.get(ifaceName)
+        return node ? { moduleName, name: ifaceName, node } : null
+    }
+
+    private isDataInterface(iface: InterfaceNode): boolean {
+        return iface.methods.length === 0 && iface.state.length === 0 && iface.uses.length === 0
+    }
+
+    private hasIncludesCycle(moduleName: string, ifaceName: string): boolean {
+        const startKey = `${moduleName}/${ifaceName}`
+        const visiting = new Set<string>()
+        const visited = new Set<string>()
+
+        const visit = (currentModule: string, currentName: string): boolean => {
+            const key = `${currentModule}/${currentName}`
+            if (visiting.has(key)) return key === startKey
+            if (visited.has(key)) return false
+
+            const iface = this.workspace.interfaces.get(currentModule)?.get(currentName)
+            if (!iface) return false
+
+            visiting.add(key)
+            for (const includeName of iface.includes) {
+                const included = this.resolveInterfaceName(includeName, currentModule)
+                if (included && visit(included.moduleName, included.name)) {
+                    return true
+                }
+            }
+            visiting.delete(key)
+            visited.add(key)
+            return false
+        }
+
+        return visit(moduleName, ifaceName)
+    }
+
+    private findIncompatibleIncludedProp(moduleName: string, ifaceName: string): string | null {
+        const seen = new Map<string, TypeNode | null>()
+        const visited = new Set<string>()
+
+        const visitProps = (currentModule: string, currentName: string): string | null => {
+            const key = `${currentModule}/${currentName}`
+            if (visited.has(key)) return null
+            visited.add(key)
+
+            const iface = this.workspace.interfaces.get(currentModule)?.get(currentName)
+            if (!iface) return null
+
+            for (const prop of iface.props) {
+                const previous = seen.get(prop.name)
+                if (previous !== undefined && !this.sameType(previous, prop.type)) {
+                    return prop.name
+                }
+                seen.set(prop.name, prop.type)
+            }
+
+            for (const includeName of iface.includes) {
+                const included = this.resolveInterfaceName(includeName, currentModule)
+                if (!included) continue
+                const duplicate = visitProps(included.moduleName, included.name)
+                if (duplicate) return duplicate
+            }
+
+            return null
+        }
+
+        return visitProps(moduleName, ifaceName)
+    }
+
+    private resolveComponentProps(use: ComponentUseNode, enclosingModuleName: string): PropNode[] | null {
+        const moduleName = use.name.parts.length === 1 ? enclosingModuleName : use.name.parts[0]
+        const componentName = use.name.parts[use.name.parts.length - 1]
+
+        if (use.componentKind === 'view') {
+            return this.workspace.views.get(moduleName)?.get(componentName)?.props ?? null
+        }
+        if (use.componentKind === 'interface') {
+            return this.workspace.interfaces.get(moduleName)?.get(componentName)?.props ?? null
+        }
         return null
+    }
+
+    private inferExpressionTypeFromProps(expression: ExpressionNode, sourceProps: PropNode[]): TypeNode | null {
+        if (expression.kind !== 'AccessExpression') return null
+        const access = expression as AccessExpressionNode
+        if (access.path[0] !== 'props' || access.path.length < 2) return null
+        return sourceProps.find(p => p.name === access.path[1])?.type ?? null
+    }
+
+    private isAssignableType(actual: TypeNode, expected: TypeNode, enclosingModuleName: string): boolean {
+        if (this.sameType(actual, expected)) return true
+        if (actual.kind !== 'NamedType' || expected.kind !== 'NamedType') return false
+        return this.interfaceIncludes(actual.name, expected.name, enclosingModuleName)
+    }
+
+    private interfaceIncludes(actualName: string, expectedName: string, enclosingModuleName: string): boolean {
+        const visited = new Set<string>()
+
+        const visit = (currentModule: string, currentName: string): boolean => {
+            const key = `${currentModule}/${currentName}`
+            if (visited.has(key)) return false
+            visited.add(key)
+
+            const iface = this.workspace.interfaces.get(currentModule)?.get(currentName)
+            if (!iface) return false
+
+            for (const includeName of iface.includes) {
+                const included = this.resolveInterfaceName(includeName, currentModule)
+                if (!included) continue
+                if (included.name === expectedName) return true
+                if (visit(included.moduleName, included.name)) return true
+            }
+            return false
+        }
+
+        return visit(enclosingModuleName, actualName)
+    }
+
+    private sameType(left: TypeNode | null, right: TypeNode | null): boolean {
+        if (left === null || right === null) return left === right
+        if (left.kind !== right.kind) return false
+
+        if (left.kind === 'PrimitiveType' && right.kind === 'PrimitiveType') {
+            return left.name === right.name && left.optional === right.optional
+        }
+        if (left.kind === 'NamedType' && right.kind === 'NamedType') {
+            return left.name === right.name && left.optional === right.optional
+        }
+        if (left.kind === 'ListType' && right.kind === 'ListType') {
+            return this.sameType(left.elementType, right.elementType)
+        }
+        if (left.kind === 'MapType' && right.kind === 'MapType') {
+            return this.sameType(left.keyType, right.keyType) && this.sameType(left.valueType, right.valueType)
+        }
+        return false
+    }
+
+    private typeToString(type: TypeNode): string {
+        if (type.kind === 'PrimitiveType') return `${type.optional ? '?' : ''}${type.name}`
+        if (type.kind === 'NamedType') return `${type.optional ? '?' : ''}${type.name}`
+        if (type.kind === 'ListType') return `list(${this.typeToString(type.elementType)})`
+        if (type.kind === 'MapType') return `map(${this.typeToString(type.keyType)}, ${this.typeToString(type.valueType)})`
+        return '?'
     }
 
     /**

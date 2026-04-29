@@ -167,9 +167,9 @@ screen OrderSummaryScreen "Shows the order summary screen" (
             currentUser is system.getContext(SystemUser)
         ),
         view OrderSummary (
-            orderId is state.context.id,
+            orderId is context.id,
             items is [],
-            total is state.context.total,
+            total is context.total,
             onConfirm is (
                 state.return(ConfirmOrderCtx)
             ),
@@ -414,6 +414,25 @@ state Unauthenticated (
         )
         expect(diag).toBeDefined()
     })
+
+    it('reports a state receives context that does not exist', () => {
+        const dir = buildTestProject({
+            'AuthModule/AuthModule.wds': `module AuthModule ()`,
+            'AuthModule/states/Unauthenticated.wds': `
+module AuthModule
+state Unauthenticated receives MissingContext (
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        const diag = diagnostics.find(d =>
+            d.diagnostic.code === DiagnosticCode.A_UNDEFINED_CONTEXT &&
+            d.diagnostic.message.includes('receives context')
+        )
+        expect(diag).toBeDefined()
+    })
 })
 
 // ── Rule A004 — Unhandled return ──────────────────────────────────────────────
@@ -578,6 +597,92 @@ screen OrderSummaryScreen (
         )
         expect(diag).toBeDefined()
     })
+
+    it('names the mounting state when a shared screen returns a context that only some states allow', () => {
+        const dir = buildTestProject({
+            'TestApp.wds': `
+system TestApp (
+    modules ( AppointmentsModule )
+    interface (
+        getContext name(string) returns(context) "desc"
+        setContext name(string) value(context) "desc"
+        dropContext name(string) "desc"
+    )
+)
+      `.trim(),
+            'AppointmentsModule/AppointmentsModule.wds': `
+module AppointmentsModule (
+    process Flow (
+        when ViewingAppointments returns AppointmentBookingRequest
+            enter ViewingAppointments "book"
+        when ViewingAppointments returns AppointmentsError
+            enter LoadingAppointments "reload"
+        when LoadingAppointments returns AppointmentList
+            enter ViewingAppointments "loaded"
+        when LoadingAppointments returns AppointmentsError
+            enter LoadingAppointments "retry"
+    )
+    start LoadingAppointments
+)
+      `.trim(),
+            'AppointmentsModule/states/LoadingAppointments.wds': `
+module AppointmentsModule
+state LoadingAppointments receives AppointmentsError (
+    returns AppointmentList, AppointmentsError
+    uses screen AppointmentsScreen
+)
+      `.trim(),
+            'AppointmentsModule/states/ViewingAppointments.wds': `
+module AppointmentsModule
+state ViewingAppointments receives AppointmentList (
+    returns AppointmentBookingRequest, AppointmentsError
+    uses screen AppointmentsScreen
+)
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentList.wds': `
+module AppointmentsModule
+context AppointmentList ( appointments(list(string)) )
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentsError.wds': `
+module AppointmentsModule
+context AppointmentsError ( message(string) )
+      `.trim(),
+            'AppointmentsModule/contexts/AppointmentBookingRequest.wds': `
+module AppointmentsModule
+context AppointmentBookingRequest ( appointmentId(string) )
+      `.trim(),
+            'AppointmentsModule/screens/AppointmentsScreen.wds': `
+module AppointmentsModule
+screen AppointmentsScreen (
+    uses (
+        view AppointmentListView (
+            onBook is (
+                state.return(bookingRequest)
+            )
+        )
+    )
+)
+      `.trim(),
+            'AppointmentsModule/views/AppointmentListView.wds': `
+module AppointmentsModule
+view AppointmentListView (
+    props (
+        onBook bookingRequest(AppointmentBookingRequest)
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        const diag = diagnostics.find(d =>
+            d.diagnostic.code === DiagnosticCode.A_INVALID_STATE_RETURN &&
+            d.diagnostic.message.includes("state 'LoadingAppointments'") &&
+            d.diagnostic.message.includes("does not return 'AppointmentBookingRequest'")
+        )
+
+        expect(diag?.diagnostic.message).toContain('state returns: AppointmentList, AppointmentsError')
+    })
 })
 
 // ── Workspace — construct paths ───────────────────────────────────────────────
@@ -594,5 +699,310 @@ describe('Workspace — construct paths', () => {
         const orderContextPath = workspace.constructPaths.get('CatalogModule/OrderContext')
         expect(orderContextPath).toBeDefined()
         expect(orderContextPath!).toContain('OrderContext.wds')
+    })
+})
+
+// ── Updated documentation semantics ──────────────────────────────────────────
+
+describe('Analyser — interface includes', () => {
+    it('reports an included interface that does not exist', () => {
+        const dir = buildTestProject({
+            'SharedModule/SharedModule.wds': `module SharedModule ()`,
+            'SharedModule/interfaces/AdminUser.wds': `
+module SharedModule
+interface AdminUser includes MissingIdentity (
+    props ( id(string) )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_UNDEFINED_INCLUDED_INTERFACE)
+    })
+
+    it('reports includes cycles', () => {
+        const dir = buildTestProject({
+            'SharedModule/SharedModule.wds': `module SharedModule ()`,
+            'SharedModule/interfaces/A.wds': `
+module SharedModule
+interface A includes B (
+    props ( id(string) )
+)
+      `.trim(),
+            'SharedModule/interfaces/B.wds': `
+module SharedModule
+interface B includes A (
+    props ( id(string) )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_CYCLIC_INTERFACE_INCLUDE)
+    })
+
+    it('reports including a behavioral interface', () => {
+        const dir = buildTestProject({
+            'SharedModule/SharedModule.wds': `module SharedModule ()`,
+            'SharedModule/interfaces/CallableIdentity.wds': `
+module SharedModule
+interface CallableIdentity (
+    props ( id(string) )
+    getId returns(string)
+)
+      `.trim(),
+            'SharedModule/interfaces/AdminUser.wds': `
+module SharedModule
+interface AdminUser includes CallableIdentity (
+    props ( permissions(list(string)) )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_INTERFACE_INCLUDE)
+    })
+
+    it('reports incompatible duplicate props inherited through includes', () => {
+        const dir = buildTestProject({
+            'SharedModule/SharedModule.wds': `module SharedModule ()`,
+            'SharedModule/interfaces/UserIdentity.wds': `
+module SharedModule
+interface UserIdentity (
+    props ( id(string) )
+)
+      `.trim(),
+            'SharedModule/interfaces/AuditActor.wds': `
+module SharedModule
+interface AuditActor (
+    props ( id(integer) )
+)
+      `.trim(),
+            'SharedModule/interfaces/AdminUser.wds': `
+module SharedModule
+interface AdminUser includes UserIdentity, AuditActor (
+    props ( permissions(list(string)) )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_DUPLICATE_INTERFACE_PROP)
+    })
+})
+
+describe('Analyser — component access rules', () => {
+    it('reports a view reading context directly', () => {
+        const dir = buildTestProject({
+            'UIModule/UIModule.wds': `module UIModule ()`,
+            'UIModule/views/BadView.wds': `
+module UIModule
+view BadView (
+    uses (
+        view TextView (
+            message is context.reason
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_RUNTIME_ACCESS)
+    })
+
+    it('reports state.return inside a view', () => {
+        const dir = buildTestProject({
+            'UIModule/UIModule.wds': `module UIModule ()`,
+            'UIModule/views/BadView.wds': `
+module UIModule
+view BadView (
+    uses (
+        view Button (
+            onClick is (
+                state.return(Clicked)
+            )
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_RUNTIME_ACCESS)
+    })
+
+    it('reports a state directly using a view', () => {
+        const dir = buildTestProject({
+            'FeatureModule/FeatureModule.wds': `module FeatureModule ()`,
+            'FeatureModule/states/BadState.wds': `
+module FeatureModule
+state BadState (
+    uses view SomeView
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_STATE_USE)
+    })
+
+})
+
+describe('Analyser — component references', () => {
+    it('reports an unresolved qualified component reference', () => {
+        const dir = buildTestProject({
+            'FeatureModule/FeatureModule.wds': `module FeatureModule ()`,
+            'FeatureModule/screens/FeatureScreen.wds': `
+module FeatureModule
+screen FeatureScreen (
+    uses (
+        view SharedModule.MissingView
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_UNDEFINED_COMPONENT)
+    })
+})
+
+describe('Analyser — implements references', () => {
+    it('resolves module-level inline handler interfaces', () => {
+        const dir = buildTestProject({
+            'RoutingModule/RoutingModule.wds': `
+module RoutingModule (
+    interface RouteSwitchHandler (
+        switch path(string) (
+            if path is "/home"
+                enter Home "home"
+        )
+    )
+)
+      `.trim(),
+            'FeatureModule/FeatureModule.wds': `
+module FeatureModule (
+    implements RoutingModule.RouteSwitchHandler (
+        switch path(string) (
+            if path is "/feature"
+                enter FeatureHome "feature"
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).not.toContain(DiagnosticCode.A_UNDEFINED_INTERFACE)
+        expect(workspace.interfaces.get('RoutingModule')?.has('RouteSwitchHandler')).toBe(true)
+    })
+
+    it('reports an implements block referencing a missing interface', () => {
+        const dir = buildTestProject({
+            'FeatureModule/FeatureModule.wds': `
+module FeatureModule (
+    implements RoutingModule.MissingHandler (
+        switch path(string) (
+            if path is "/feature"
+                enter FeatureHome "feature"
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_UNDEFINED_INTERFACE)
+    })
+})
+
+describe('Analyser — interface assignability', () => {
+    it('allows passing an including interface where the included interface is expected', () => {
+        const dir = buildTestProject({
+            'UsersModule/UsersModule.wds': `module UsersModule ()`,
+            'UsersModule/interfaces/UserIdentity.wds': `
+module UsersModule
+interface UserIdentity (
+    props ( id(string), fullName(string) )
+)
+      `.trim(),
+            'UsersModule/interfaces/AdminUser.wds': `
+module UsersModule
+interface AdminUser includes UserIdentity (
+    props ( permissions(list(string)) )
+)
+      `.trim(),
+            'UsersModule/views/UserBadge.wds': `
+module UsersModule
+view UserBadge (
+    props ( user(UserIdentity) )
+)
+      `.trim(),
+            'UsersModule/views/AdminHeader.wds': `
+module UsersModule
+view AdminHeader (
+    props ( admin(AdminUser) )
+    uses (
+        view UserBadge (
+            user is props.admin
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).not.toContain(DiagnosticCode.A_INVALID_TYPE_ASSIGNMENT)
+    })
+
+    it('reports incompatible interface prop assignment', () => {
+        const dir = buildTestProject({
+            'UsersModule/UsersModule.wds': `module UsersModule ()`,
+            'UsersModule/interfaces/UserIdentity.wds': `
+module UsersModule
+interface UserIdentity (
+    props ( id(string), fullName(string) )
+)
+      `.trim(),
+            'UsersModule/interfaces/Product.wds': `
+module UsersModule
+interface Product (
+    props ( id(string), name(string) )
+)
+      `.trim(),
+            'UsersModule/views/UserBadge.wds': `
+module UsersModule
+view UserBadge (
+    props ( user(UserIdentity) )
+)
+      `.trim(),
+            'UsersModule/views/ProductHeader.wds': `
+module UsersModule
+view ProductHeader (
+    props ( product(Product) )
+    uses (
+        view UserBadge (
+            user is props.product
+        )
+    )
+)
+      `.trim(),
+        })
+
+        const workspace = Workspace.load(dir)
+        const { diagnostics } = new Analyser(workspace).analyse()
+        expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_TYPE_ASSIGNMENT)
     })
 })

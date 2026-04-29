@@ -381,6 +381,12 @@ export class Workspace {
             case 'Module':
                 this.modules.set(node.name, node)
                 this.modulePaths.set(node.name, filePath)
+                for (const inlineInterface of node.inlineInterfaces) {
+                    inlineInterface.module = node.name
+                    this.ensureModuleMap(this.interfaces, node.name)
+                    this.interfaces.get(node.name)!.set(inlineInterface.name, inlineInterface)
+                    this.constructPaths.set(`${node.name}/${inlineInterface.name}`, filePath)
+                }
                 break
 
             case 'State': {

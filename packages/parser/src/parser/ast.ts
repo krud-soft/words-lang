@@ -232,7 +232,7 @@ export interface SimpleReturnsNode extends BaseNode {
  * Side effects execute before the context is produced and the module transitions.
  *
  * Examples:
- *   `system.setContext name is SessionToken, value is state.context`
+ *   `system.setContext name is SessionToken, value is context`
  *   `system.dropContext name is SessionToken`
  */
 export interface SideEffectNode extends BaseNode {
@@ -258,7 +258,7 @@ export interface ExpandedReturnNode extends BaseNode {
  * Example:
  *   returns (
  *     SessionToken (
- *       system.setContext name is SessionToken, value is state.context
+ *       system.setContext name is SessionToken, value is context
  *     )
  *     SessionValidationError (
  *       system.dropContext name is SessionToken
@@ -288,8 +288,8 @@ export type ReturnsNode = SimpleReturnsNode | ExpandedReturnsNode
  *
  * Examples:
  *   `type is "warning"`
- *   `message is state.context.reason`
- *   `name is SessionToken, value is state.context`
+ *   `message is context.reason`
+ *   `name is SessionToken, value is context`
  */
 export interface ArgumentNode extends BaseNode {
     kind: 'Argument'
@@ -304,9 +304,9 @@ export interface ArgumentNode extends BaseNode {
  * Used wherever a value is read from state, props, or a bound iteration variable.
  *
  * Examples:
- *   `state.context.fullName` → path = ['state', 'context', 'fullName']
- *   `props.items`            → path = ['props', 'items']
- *   `notification.message`   → path = ['notification', 'message']
+ *   `context.fullName`      → path = ['context', 'fullName']
+ *   `props.items`           → path = ['props', 'items']
+ *   `notification.message`  → path = ['notification', 'message']
  */
 export interface AccessExpressionNode extends BaseNode {
     kind: 'AccessExpression'
@@ -417,15 +417,15 @@ export type StatementNode =
 
 /**
  * A boolean condition evaluated inside a `uses` block.
- * The `left` side is always a property access — `state.context`,
- * `state.context.status`, or `props.someField`.
+ * The `left` side is always a property access — `context`,
+ * `context.status`, or `props.someField`.
  * The `right` side is the value being compared against.
  * `operator` is either `'is'` (equality) or `'is not'` (inequality).
  *
  * Examples:
- *   `state.context is AccountDeauthenticated`
- *   `state.context.status is "pending"`
- *   `state.context is not AccountRecovered`
+ *   `context is AccountDeauthenticated`
+ *   `context.status is "pending"`
+ *   `context is not AccountRecovered`
  */
 export interface ConditionNode extends BaseNode {
     kind: 'Condition'
@@ -455,10 +455,10 @@ export interface ConditionalBlockNode extends BaseNode {
  * For a map:  `bindings` has two entries — the key variable and the value variable.
  *
  * Examples:
- *   `for state.context.notifications as notification ( ... )`
- *     → collection = AccessExpression(['state','context','notifications']),
+ *   `for context.notifications as notification ( ... )`
+ *     → collection = AccessExpression(['context','notifications']),
  *       bindings = ['notification']
- *   `for state.context.productsByCategoryMap as category, products ( ... )`
+ *   `for context.productsByCategoryMap as category, products ( ... )`
  *     → bindings = ['category', 'products']
  */
 export interface IterationBlockNode extends BaseNode {
@@ -710,7 +710,7 @@ export interface ContextNode extends BaseNode {
 
 /**
  * A screen definition — the top-level UI unit used by a state.
- * Has implicit access to `state.context` and `state.return()`.
+ * Has implicit access to `context` and `state.return()`.
  * Can only be used by a state, never by another component.
  * Its `uses` block activates view components and may contain
  * conditional blocks and iteration blocks.
@@ -728,7 +728,7 @@ export interface ScreenNode extends BaseNode {
  * Receives all data and interaction props via `props`.
  * Interaction prop names are defined by the designer — the language
  * imposes no naming convention on them.
- * Has no access to `state.context` or `state.return()`.
+ * Has no access to `context` or `state.return()`.
  * Can declare local mutable `state` for concerns it owns entirely
  * (input values, toggle states, hover conditions).
  * Can use other views in its own `uses` block.
@@ -786,6 +786,9 @@ export interface AdapterNode extends BaseNode {
  * Used as a data model (Product, CartItem), a helper (CatalogueFilter),
  * a handler shape (RouteSwitchHandler), or a callable contract (Pagination).
  *
+ * `includes` stores explicit polymorphic relationships declared by the
+ * interface, such as `interface AdminUser includes UserIdentity`.
+ *
  * Interface components are the typed vocabulary that all other components
  * reference in their own props and method declarations.
  *
@@ -798,6 +801,7 @@ export interface InterfaceNode extends BaseNode {
     kind: 'Interface'
     module: string
     name: string
+    includes: QualifiedName[]
     description: string | null
     props: PropNode[]
     state: PropNode[]

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Lexer } from '../src/lexer/lexer'
 import { Parser } from '../src/parser/parser'
+import { DiagnosticCode } from '../src/analyser/diagnostics'
 import {
     SystemNode,
     ModuleNode,
@@ -9,6 +10,7 @@ import {
     ScreenNode,
     ViewNode,
     AdapterNode,
+    InterfaceNode,
     SimpleReturnsNode,
     ExpandedReturnsNode,
 } from '../src/parser/ast'
@@ -231,13 +233,20 @@ module SessionModule
 state SessionValidating receives StoredSession (
     returns (
         SessionToken (
-            system.setContext name is SessionToken, value is state.context
+            system.setContext (
+                name is SessionToken,
+                value is context
+            )
         )
         SessionValidationError (
-            system.dropContext name is SessionToken
+            system.dropContext (
+                name is SessionToken
+            )
         )
     )
-    uses adapter SessionAdapter.validateSession existing is state.context
+    uses adapter SessionAdapter.validateSession (
+        existing is context
+    )
 )
     `.trim()
 
@@ -260,7 +269,10 @@ module AuthModule
 state Authenticated receives PatientIdentity (
     returns LogoutRequest
     uses (
-        system.setContext name is PatientIdentity, value is state.context,
+        system.setContext (
+            name is PatientIdentity,
+            value is context
+        ),
         screen PortalHomeScreen
     )
 )
@@ -329,9 +341,9 @@ screen OrderSummaryScreen "Shows the order summary screen" (
             currentUser is system.getContext(SystemUser)
         ),
         view OrderSummary (
-            orderId is state.context.id,
+            orderId is context.id,
             items is [],
-            total is state.context.total,
+            total is context.total,
             onConfirm is (
                 state.return(confirmDetails)
             ),
@@ -379,7 +391,7 @@ module AuthModule
 screen PortalHomeScreen (
     uses (
         view PortalNavView (
-            patientName is state.context.fullName,
+            patientName is context.fullName,
             onLogout is (
                 state.return LogoutRequest (
                     reason is "User decided to deauthenticate"
@@ -412,8 +424,11 @@ screen PortalHomeScreen (
 module AuthModule
 screen LoginScreen (
     uses (
-        if state.context is AccountDeauthenticated (
-            view UIModule.Notification type is "warning", message is state.context.reason
+        if context is AccountDeauthenticated (
+            view UIModule.Notification (
+                type is "warning",
+                message is context.reason
+            )
         )
         view UIModule.LoginForm (
             onSubmit is (
@@ -438,7 +453,7 @@ screen LoginScreen (
 module NotificationsModule
 screen NotificationsScreen (
     uses (
-        for state.context.notifications as notification (
+        for context.notifications as notification (
             view UIModule.NotificationCard (
                 message is notification.message,
                 type is notification.type
@@ -456,7 +471,7 @@ screen NotificationsScreen (
         expect(screen.uses[0].kind).toBe('IterationBlock')
 
         const iter = screen.uses[0] as any
-        expect(iter.collection.path).toEqual(['state', 'context', 'notifications'])
+        expect(iter.collection.path).toEqual(['context', 'notifications'])
         expect(iter.bindings).toEqual(['notification'])
         expect(iter.body).toHaveLength(1)
     })
@@ -565,6 +580,264 @@ adapter AuthAdapter "Connects to the authentication service" (
         expect(adapter.methods[0].returnType?.kind).toBe('NamedType')
         expect(adapter.methods[1].name).toBe('logout')
         expect(adapter.methods[1].returnType).toBeNull()
+    })
+
+})
+
+// ── Characterization ──────────────────────────────────────────────────────────
+
+describe('Parser — characterization', () => {
+
+    it('parses positional PascalIdent system call arguments', () => {
+        const src = `
+module CatalogModule
+screen OrderSummaryScreen (
+    uses (
+        view AppUIModule.NavigationBar (
+            currentUser is system.getContext(SystemUser)
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const navBar = screen.uses[0] as any
+        const currentUser = navBar.args[0]
+        expect(currentUser.value.kind).toBe('CallExpression')
+        expect(currentUser.value.args).toHaveLength(1)
+        expect(currentUser.value.args[0].name).toBe('')
+        expect(currentUser.value.args[0].value.path).toEqual(['SystemUser'])
+    })
+
+    it('parses map iteration with key and value bindings', () => {
+        const src = `
+module CatalogModule
+screen CatalogueScreen (
+    uses (
+        for context.productsByCategory as category, products (
+            view UIModule.CategorySection (
+                title is category,
+                items is products
+            )
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const iter = screen.uses[0] as any
+        expect(iter.kind).toBe('IterationBlock')
+        expect(iter.bindings).toEqual(['category', 'products'])
+    })
+
+    it('parses empty map defaults in local state', () => {
+        const src = `
+module CatalogModule
+view FilterPanel (
+    state (
+        selectedById(map(string, Product)) is {}
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const view = document.nodes[0] as ViewNode
+        expect(view.state).toHaveLength(1)
+        expect(view.state[0].defaultValue?.kind).toBe('MapLiteral')
+    })
+
+    it('rejects inline component arguments without a parenthesized body', () => {
+        const src = `
+module SessionModule
+state SessionValidating receives StoredSession (
+    returns SessionToken
+    uses adapter SessionAdapter.validateSession existing is context
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics.map(d => d.code)).toContain(DiagnosticCode.P_INLINE_COMPONENT_ARGUMENTS)
+
+        const state = document.nodes[0] as StateNode
+        const adapterUse = state.uses[0] as any
+        expect(adapterUse.componentKind).toBe('adapter')
+        expect(adapterUse.name.parts).toEqual(['SessionAdapter', 'validateSession'])
+        expect(adapterUse.args).toHaveLength(0)
+    })
+
+    it('rejects old inline provider arguments', () => {
+        const src = `
+module MessagingModule
+state ViewingInbox receives MessageInbox (
+    returns DraftMessage
+    uses (
+        screen InboxScreen,
+        provider MessagingProvider threads is context.threads
+    )
+)
+    `.trim()
+
+        const { diagnostics } = parse(src)
+        expect(diagnostics.map(d => d.code)).toContain(DiagnosticCode.P_INLINE_COMPONENT_ARGUMENTS)
+    })
+
+    it('rejects state.context as invalid syntax', () => {
+        const src = `
+module FeatureModule
+screen FeatureScreen (
+    uses (
+        view MessageView (
+            message is state.context.message
+        )
+    )
+)
+    `.trim()
+
+        const { diagnostics } = parse(src)
+        const diag = diagnostics.find(d => d.code === DiagnosticCode.P_INVALID_STATE_CONTEXT)
+        expect(diag).toBeDefined()
+        expect(diag!.message).toContain("Unexpected 'state.context'")
+        expect(diag!.message).toContain('context.message')
+    })
+
+    it('parses interface component bodies with props, state, uses, and methods', () => {
+        const src = `
+module ProductsModule
+interface ProductDetails "Loads and exposes product details" (
+    props (
+        id(string)
+    )
+    state (
+        reviews(list(ProductReview)) is []
+    )
+    uses (
+        adapter system.ProductsModule.ProductsAdapter.loadReviews (
+            productId is props.id,
+            onLoad is (
+                state.reviews is reviews
+            )
+        )
+    )
+    getReviews returns(list(ProductReview))
+        "Returns loaded reviews"
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const iface = document.nodes[0] as InterfaceNode
+        expect(iface.props).toHaveLength(1)
+        expect(iface.state).toHaveLength(1)
+        expect(iface.uses).toHaveLength(1)
+        expect(iface.methods).toHaveLength(1)
+        expect(iface.methods[0].name).toBe('getReviews')
+    })
+
+    it('parses interface includes clauses', () => {
+        const src = `
+module UsersModule
+interface StaffAdmin includes SharedModule.UserIdentity, AuditActor "Represents staff with audit permissions" (
+    props (
+        permissions(list(Permission))
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const iface = document.nodes[0] as InterfaceNode
+        expect(iface.name).toBe('StaffAdmin')
+        expect(iface.includes.map(name => name.parts)).toEqual([
+            ['SharedModule', 'UserIdentity'],
+            ['AuditActor'],
+        ])
+        expect(iface.description).toBe('Represents staff with audit permissions')
+    })
+
+    it('parses parenthesized system calls in uses blocks', () => {
+        const src = `
+module AuthModule
+state Authenticated receives SystemUser (
+    returns LogoutRequest
+    uses (
+        system.setContext (
+            name is SystemUser,
+            value is context
+        ),
+        system.RoutingModule.dispatch (
+            path is "/home"
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const state = document.nodes[0] as StateNode
+        const setContext = state.uses[0] as any
+        const dispatch = state.uses[1] as any
+        expect(setContext.kind).toBe('CallExpression')
+        expect(setContext.args.map((arg: any) => arg.name)).toEqual(['name', 'value'])
+        expect(setContext.args[1].value.path).toEqual(['context'])
+        expect(dispatch.args[0].name).toBe('path')
+    })
+
+    it('parses bare context property access in screens', () => {
+        const src = `
+module AuthModule
+screen LoginScreen (
+    uses (
+        view UIModule.Notification (
+            message is context.reason
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const notification = screen.uses[0] as any
+        expect(notification.args[0].value.path).toEqual(['context', 'reason'])
+    })
+
+    it('parses state.return with named value argument', () => {
+        const src = `
+module AuthModule
+screen LoginScreen (
+    uses (
+        view UIModule.LoginForm (
+            onSubmit is (
+                state.return (
+                    value is credentials
+                )
+            )
+        )
+    )
+)
+    `.trim()
+
+        const { document, diagnostics } = parse(src)
+        expect(diagnostics).toHaveLength(0)
+
+        const screen = document.nodes[0] as ScreenNode
+        const loginForm = screen.uses[0] as any
+        const onSubmit = loginForm.args[0]
+        const stmt = onSubmit.value.statements[0]
+        expect(stmt.kind).toBe('StateReturnStatement')
+        expect(stmt.contextName).toBe('credentials')
     })
 
 })

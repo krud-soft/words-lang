@@ -25,7 +25,7 @@ describe('Lexer', () => {
     })
 
     it('tokenizes "is not" as a single IsNot token', () => {
-        const tokens = new Lexer('if state.context is not AccountRecovered').tokenize()
+        const tokens = new Lexer('if context is not AccountRecovered').tokenize()
         const isNot = tokens.find(t => t.type === TokenType.IsNot)
         expect(isNot).toBeDefined()
         expect(isNot!.value).toBe('is not')
@@ -59,6 +59,14 @@ describe('Lexer', () => {
         expect(tokens[3].type).toBe(TokenType.TBoolean)
         expect(tokens[4].type).toBe(TokenType.TList)
         expect(tokens[5].type).toBe(TokenType.TMap)
+    })
+
+    it('tokenizes interface includes as a keyword', () => {
+        const tokens = new Lexer('interface AdminUser includes UserIdentity').tokenize()
+        expect(tokens[0].type).toBe(TokenType.Interface)
+        expect(tokens[1].type).toBe(TokenType.PascalIdent)
+        expect(tokens[2].type).toBe(TokenType.Includes)
+        expect(tokens[3].type).toBe(TokenType.PascalIdent)
     })
 
     it('tracks line and column positions', () => {

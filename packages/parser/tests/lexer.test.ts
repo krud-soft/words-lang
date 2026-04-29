@@ -25,7 +25,7 @@ describe('Lexer', () => {
     })
 
     it('tokenizes "is not" as a single IsNot token', () => {
-        const tokens = new Lexer('if state.context is not AccountRecovered').tokenize()
+        const tokens = new Lexer('if context is not AccountRecovered').tokenize()
         const isNot = tokens.find(t => t.type === TokenType.IsNot)
         expect(isNot).toBeDefined()
         expect(isNot!.value).toBe('is not')

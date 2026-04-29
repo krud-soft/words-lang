@@ -191,7 +191,6 @@ ComponentKind =
 
 ComponentUseBody =
   "(" (ArgumentList | UsesClause | UseEntry)* ")"
-  | InlineArgumentList
 
 ConditionalBlock =
   "if" Condition "(" UseEntryList? ")"

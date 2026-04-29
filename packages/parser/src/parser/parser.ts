@@ -21,8 +21,8 @@
  *   unless the calling rule explicitly needs them (e.g. ownership declaration
  *   detection requires newlines).
  *
- * - `system` and `state` are both keywords and identifier prefixes in access
- *   expressions (`system.setContext`, `state.context`). The parser disambiguates
+ * - `system`, `state`, and `context` can be keywords or expression roots
+ *   (`system.setContext`, `state.return`, `context.reason`). The parser disambiguates
  *   by context — inside a `uses` block or argument value position, these are
  *   treated as access expression roots, not construct keywords.
  */
@@ -999,21 +999,30 @@ export class Parser {
             }
             this.expect(TokenType.RParen)
         } else {
-            // Inline arguments without parens: adapter X key is value, key is value
-            // Also handles a leading comma before the first arg:
-            //   adapter X, key is value, key2 is value2
-            // Consume the comma only when what follows (past trivia) is an argument
-            // start (CamelIdent), not a new use-entry keyword or closing token.
             if (this.check(TokenType.Comma) && this.peekPastTriviaIsCamelIdent()) {
-                this.advance() // consume the leading comma
+                this.advance()
                 this.skipTrivia()
-            }
-            if (this.checkArgumentStart()) {
-                args.push(...this.parseInlineArgList())
+                this.rejectInlineComponentArguments()
+            } else if (this.checkArgumentStart()) {
+                this.rejectInlineComponentArguments()
             }
         }
 
         return { kind: 'ComponentUse', token: tok, componentKind, name, args, uses }
+    }
+
+    /**
+     * Component/provider/adapter/view arguments must be written inside a
+     * parenthesized named-argument block. Consume the old inline form for
+     * recovery, but do not attach those arguments to the AST.
+     */
+    private rejectInlineComponentArguments(): void {
+        this.error(
+            DiagnosticCode.P_INLINE_COMPONENT_ARGUMENTS,
+            `Unexpected inline component argument '${this.current().value}' — use a parenthesized argument block`,
+            this.current()
+        )
+        this.parseInlineArgList()
     }
 
     /**
@@ -1065,9 +1074,9 @@ export class Parser {
 
     /**
      * Parses a condition expression:
-     *   state.context is AccountDeauthenticated
-     *   state.context.status is "pending"
-     *   state.context is not AccountRecovered
+     *   context is AccountDeauthenticated
+     *   context.status is "pending"
+     *   context is not AccountRecovered
      */
     private parseCondition(): ConditionNode {
         const tok = this.current()
@@ -1184,7 +1193,7 @@ export class Parser {
      * Handles:
      *   - Block expressions:          `( state.return(x) )`
      *   - state.return():             `state.return(contextName)`
-     *   - Access expressions:         `context.fullName`, `state.context.fullName`, `props.items`
+     *   - Access expressions:         `context.fullName`, `props.items`
      *   - Call expressions:           `system.getContext(SystemUser)`
      *   - Literals:                   `"string"`, `42`, `3.14`, `true`, `false`, `[]`, `{}`
      *   - PascalCase type references: `SystemUser` (e.g. in system.getContext(SystemUser))
@@ -1374,6 +1383,8 @@ export class Parser {
             return { kind: 'StateReturnExpression', token: tok, contextName } as StateReturnExpressionNode
         }
 
+        this.errorOnStateContextAccess(tok, path)
+
         // Call expression: path(args...)
         // Supports both keyword-style args (`name is value`) and a single positional
         // PascalIdent type reference (e.g. `system.getContext(SystemUser)`).
@@ -1427,7 +1438,19 @@ export class Parser {
             }
         }
 
+        this.errorOnStateContextAccess(tok, path)
         return { kind: 'AccessExpression', token: tok, path }
+    }
+
+    private errorOnStateContextAccess(tok: Token, path: string[]): void {
+        if (path[0] !== 'state' || path[1] !== 'context') return
+
+        const replacement = ['context', ...path.slice(2)].join('.')
+        this.error(
+            DiagnosticCode.P_INVALID_STATE_CONTEXT,
+            `Unexpected 'state.context' — use '${replacement}'`,
+            tok
+        )
     }
 
     // ── Literals ───────────────────────────────────────────────────────────────

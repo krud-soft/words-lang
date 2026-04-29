@@ -167,9 +167,9 @@ screen OrderSummaryScreen "Shows the order summary screen" (
             currentUser is system.getContext(SystemUser)
         ),
         view OrderSummary (
-            orderId is state.context.id,
+            orderId is context.id,
             items is [],
-            total is state.context.total,
+            total is context.total,
             onConfirm is (
                 state.return(ConfirmOrderCtx)
             ),
@@ -767,6 +767,7 @@ state BadState (
         const { diagnostics } = new Analyser(workspace).analyse()
         expect(diagnostics.map(d => d.diagnostic.code)).toContain(DiagnosticCode.A_INVALID_STATE_USE)
     })
+
 })
 
 describe('Analyser — component references', () => {

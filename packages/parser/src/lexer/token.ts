@@ -69,7 +69,7 @@ export enum TokenType {
 
   /**
    * `adapter` — opens an adapter definition, or activates an adapter in a `uses` block.
-   * e.g. `adapter AuthAdapter.login credentials is state.context`
+   * e.g. `adapter AuthAdapter.login (credentials is context)`
    */
   Adapter = 'adapter',
 
@@ -143,13 +143,13 @@ export enum TokenType {
   /**
    * `if` — opens a conditional block inside a `uses` block or an
    * `implements` handler body.
-   * e.g. `if state.context is AccountDeauthenticated (`
+   * e.g. `if context is AccountDeauthenticated (`
    */
   If = 'if',
 
   /**
    * `for` — opens an iteration block inside a `uses` block.
-   * e.g. `for state.context.notifications as notification (`
+   * e.g. `for context.notifications as notification (`
    */
   For = 'for',
 
@@ -163,7 +163,7 @@ export enum TokenType {
   /**
    * `is` — the assignment and equality operator.
    * As assignment: `type is "warning"`, `path is "/home"`
-   * As comparison: `if state.context is AccountDeauthenticated`
+   * As comparison: `if context is AccountDeauthenticated`
    * Context determines which role it plays.
    */
   Is = 'is',
@@ -171,7 +171,7 @@ export enum TokenType {
   /**
    * `is not` — the inequality operator, normalised from the two-word
    * sequence `is not` into a single token during lexing.
-   * e.g. `if state.context is not AccountRecovered`
+   * e.g. `if context is not AccountRecovered`
    */
   IsNot = 'is_not',
 

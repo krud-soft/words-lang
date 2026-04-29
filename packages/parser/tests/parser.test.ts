@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Lexer } from '../src/lexer/lexer'
 import { Parser } from '../src/parser/parser'
+import { DiagnosticCode } from '../src/analyser/diagnostics'
 import {
     SystemNode,
     ModuleNode,
@@ -232,13 +233,20 @@ module SessionModule
 state SessionValidating receives StoredSession (
     returns (
         SessionToken (
-            system.setContext name is SessionToken, value is state.context
+            system.setContext (
+                name is SessionToken,
+                value is context
+            )
         )
         SessionValidationError (
-            system.dropContext name is SessionToken
+            system.dropContext (
+                name is SessionToken
+            )
         )
     )
-    uses adapter SessionAdapter.validateSession existing is state.context
+    uses adapter SessionAdapter.validateSession (
+        existing is context
+    )
 )
     `.trim()
 
@@ -261,7 +269,10 @@ module AuthModule
 state Authenticated receives PatientIdentity (
     returns LogoutRequest
     uses (
-        system.setContext name is PatientIdentity, value is state.context,
+        system.setContext (
+            name is PatientIdentity,
+            value is context
+        ),
         screen PortalHomeScreen
     )
 )
@@ -330,9 +341,9 @@ screen OrderSummaryScreen "Shows the order summary screen" (
             currentUser is system.getContext(SystemUser)
         ),
         view OrderSummary (
-            orderId is state.context.id,
+            orderId is context.id,
             items is [],
-            total is state.context.total,
+            total is context.total,
             onConfirm is (
                 state.return(confirmDetails)
             ),
@@ -380,7 +391,7 @@ module AuthModule
 screen PortalHomeScreen (
     uses (
         view PortalNavView (
-            patientName is state.context.fullName,
+            patientName is context.fullName,
             onLogout is (
                 state.return LogoutRequest (
                     reason is "User decided to deauthenticate"
@@ -413,8 +424,11 @@ screen PortalHomeScreen (
 module AuthModule
 screen LoginScreen (
     uses (
-        if state.context is AccountDeauthenticated (
-            view UIModule.Notification type is "warning", message is state.context.reason
+        if context is AccountDeauthenticated (
+            view UIModule.Notification (
+                type is "warning",
+                message is context.reason
+            )
         )
         view UIModule.LoginForm (
             onSubmit is (
@@ -439,7 +453,7 @@ screen LoginScreen (
 module NotificationsModule
 screen NotificationsScreen (
     uses (
-        for state.context.notifications as notification (
+        for context.notifications as notification (
             view UIModule.NotificationCard (
                 message is notification.message,
                 type is notification.type
@@ -457,7 +471,7 @@ screen NotificationsScreen (
         expect(screen.uses[0].kind).toBe('IterationBlock')
 
         const iter = screen.uses[0] as any
-        expect(iter.collection.path).toEqual(['state', 'context', 'notifications'])
+        expect(iter.collection.path).toEqual(['context', 'notifications'])
         expect(iter.bindings).toEqual(['notification'])
         expect(iter.body).toHaveLength(1)
     })
@@ -603,7 +617,7 @@ screen OrderSummaryScreen (
 module CatalogModule
 screen CatalogueScreen (
     uses (
-        for state.context.productsByCategory as category, products (
+        for context.productsByCategory as category, products (
             view UIModule.CategorySection (
                 title is category,
                 items is products
@@ -640,23 +654,58 @@ view FilterPanel (
         expect(view.state[0].defaultValue?.kind).toBe('MapLiteral')
     })
 
-    it('parses inline adapter arguments without a parenthesized body', () => {
+    it('rejects inline component arguments without a parenthesized body', () => {
         const src = `
 module SessionModule
 state SessionValidating receives StoredSession (
     returns SessionToken
-    uses adapter SessionAdapter.validateSession existing is state.context
+    uses adapter SessionAdapter.validateSession existing is context
 )
     `.trim()
 
         const { document, diagnostics } = parse(src)
-        expect(diagnostics).toHaveLength(0)
+        expect(diagnostics.map(d => d.code)).toContain(DiagnosticCode.P_INLINE_COMPONENT_ARGUMENTS)
 
         const state = document.nodes[0] as StateNode
         const adapterUse = state.uses[0] as any
         expect(adapterUse.componentKind).toBe('adapter')
         expect(adapterUse.name.parts).toEqual(['SessionAdapter', 'validateSession'])
-        expect(adapterUse.args[0].name).toBe('existing')
+        expect(adapterUse.args).toHaveLength(0)
+    })
+
+    it('rejects old inline provider arguments', () => {
+        const src = `
+module MessagingModule
+state ViewingInbox receives MessageInbox (
+    returns DraftMessage
+    uses (
+        screen InboxScreen,
+        provider MessagingProvider threads is context.threads
+    )
+)
+    `.trim()
+
+        const { diagnostics } = parse(src)
+        expect(diagnostics.map(d => d.code)).toContain(DiagnosticCode.P_INLINE_COMPONENT_ARGUMENTS)
+    })
+
+    it('rejects state.context as invalid syntax', () => {
+        const src = `
+module FeatureModule
+screen FeatureScreen (
+    uses (
+        view MessageView (
+            message is state.context.message
+        )
+    )
+)
+    `.trim()
+
+        const { diagnostics } = parse(src)
+        const diag = diagnostics.find(d => d.code === DiagnosticCode.P_INVALID_STATE_CONTEXT)
+        expect(diag).toBeDefined()
+        expect(diag!.message).toContain("Unexpected 'state.context'")
+        expect(diag!.message).toContain('context.message')
     })
 
     it('parses interface component bodies with props, state, uses, and methods', () => {

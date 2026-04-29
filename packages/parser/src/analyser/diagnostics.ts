@@ -97,6 +97,15 @@ export enum DiagnosticCode {
      */
     P_EMPTY_HANDLER_ARG_TYPE = 'P011',
 
+    /**
+     * A component use passed arguments outside a parenthesized argument block.
+     * e.g. `provider MessagingProvider threads is context.threads`.
+     */
+    P_INLINE_COMPONENT_ARGUMENTS = 'P012',
+
+    /** `state.context` is not valid; screens read the current state data as `context`. */
+    P_INVALID_STATE_CONTEXT = 'P013',
+
     // ── Analyser errors ─────────────────────────────────────────────────────────
 
     /**
